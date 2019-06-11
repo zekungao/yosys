@@ -25,7 +25,7 @@
 YOSYS_NAMESPACE_BEGIN
 
 extern void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name,
-		bool run_clean = false, bool sop_mode = false, bool wideports = false);
+		bool run_clean = false, bool sop_mode = false, bool wideports = false, bool readnames = false);
 
 YOSYS_NAMESPACE_END
 

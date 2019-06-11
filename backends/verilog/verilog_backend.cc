@@ -1388,8 +1388,14 @@ void dump_cell(std::ostream &f, std::string indent, RTLIL::Cell *cell)
 	std::string cell_name = cellname(cell);
 	if (cell_name != id(cell->name))
 		f << stringf(" %s /* %s */ (", cell_name.c_str(), id(cell->name).c_str());
-	else
-		f << stringf(" %s (", cell_name.c_str());
+    else if(cell->simpleName != "")
+    {
+        std::string name = stringf("%s",log_id(cell->simpleName));
+        name = name.substr(1);
+        f << stringf(" %s (", name.c_str());
+    }
+    else
+        f << stringf(" %s (", cell_name.c_str());
 
 	bool first_arg = true;
 	std::set<RTLIL::IdString> numbered_ports;

@@ -78,7 +78,7 @@ failed:
 	return std::pair<RTLIL::IdString, int>("\\" + name, 0);
 }
 
-void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bool run_clean, bool sop_mode, bool wideports)
+void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bool run_clean, bool sop_mode, bool wideports, bool readnames)
 {
 	RTLIL::Module *module = nullptr;
 	RTLIL::Const *lutptr = NULL;
@@ -87,6 +87,7 @@ void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bo
 	RTLIL::State lut_default_state = RTLIL::State::Sx;
 	std::string err_reason;
 	int blif_maxnum = 0, sopmode = -1;
+    int new_gate_names_counter = 0;
 
 	auto blif_wire = [&](const std::string &wire_name) -> Wire*
 	{
@@ -126,6 +127,7 @@ void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bo
 	size_t buffer_size = 4096;
 	char *buffer = (char*)malloc(buffer_size);
 	int line_count = 0;
+    std::string next_gate_id;
 
 	while (1)
 	{
@@ -138,7 +140,16 @@ void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bo
 
 	continue_without_read:
 		if (buffer[0] == '#')
-			continue;
+        {
+
+             if (buffer[1] == 'g' && buffer[2] == 'g')
+             {
+                 strtok(buffer, " \t\r\n");
+                 next_gate_id = strtok(buffer, " \t\r\n");
+                 next_gate_id = next_gate_id.substr(3);
+             }
+             continue;
+        }
 
 		if (buffer[0] == '.')
 		{
@@ -368,7 +379,17 @@ void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bo
 					goto error;
 
 				IdString celltype = RTLIL::escape_id(p);
-				RTLIL::Cell *cell = module->addCell(NEW_ID, celltype);
+
+                RTLIL::Cell *cell;
+                if(readnames)
+                {
+                    if(next_gate_id == "0")
+                        cell = module->addCell(stringf("$bb%d",new_gate_names_counter++), celltype);
+                    else
+                        cell = module->addCell(stringf("$gg%s",next_gate_id.c_str()), celltype);
+                }
+                else
+                    cell = module->addCell(NEW_ID, celltype);
 
 				dict<RTLIL::IdString, dict<int, SigBit>> cell_wideports_cache;
 
@@ -600,6 +621,7 @@ struct BlifFrontend : public Frontend {
 	{
 		bool sop_mode = false;
 		bool wideports = false;
+        bool readnames = false;
 
 		log_header(design, "Executing BLIF frontend.\n");
 
@@ -614,11 +636,15 @@ struct BlifFrontend : public Frontend {
 				wideports = true;
 				continue;
 			}
+            if (arg == "-readnames") {
+                readnames = true;
+                continue;
+            }
 			break;
 		}
 		extra_args(f, filename, args, argidx);
 
-		parse_blif(design, *f, "", true, sop_mode, wideports);
+        parse_blif(design, *f, "", true, sop_mode, wideports, readnames);
 	}
 } BlifFrontend;
 

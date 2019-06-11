@@ -44,6 +44,7 @@ struct BlifDumperConfig
 	bool iattr_mode;
 	bool blackbox_mode;
 	bool noalias_mode;
+    bool write_ff_as_latches;
 
 	std::string buf_type, buf_in, buf_out;
 	std::map<RTLIL::IdString, std::pair<RTLIL::IdString, RTLIL::IdString>> unbuf_types;
@@ -51,7 +52,7 @@ struct BlifDumperConfig
 
 	BlifDumperConfig() : icells_mode(false), conn_mode(false), impltf_mode(false), gates_mode(false),
 			cname_mode(false), iname_mode(false), param_mode(false), attr_mode(false), iattr_mode(false),
-			blackbox_mode(false), noalias_mode(false) { }
+            blackbox_mode(false), noalias_mode(false), write_ff_as_latches(false) { }
 };
 
 struct BlifDumper
@@ -407,30 +408,37 @@ struct BlifDumper
 				goto internal_cell;
 			}
 
-			f << stringf(".%s %s", subckt_or_gate(cell->type.str()), cstr(cell->type));
-			for (auto &conn : cell->connections())
-			{
-				if (conn.second.size() == 1) {
-					f << stringf(" %s=%s", cstr(conn.first), cstr(conn.second[0]));
-					continue;
-				}
+            if(config->write_ff_as_latches && (cell->hasPort("\\D") && (cell->hasPort("\\Q") || cell->hasPort("\\QN"))))
+            {
+                 f << stringf(".latch %s %s %s\n", cstr(cell->getPort("\\D")), cstr(cell->getPort("\\QN")), cstr_init(cell->getPort("\\QN")));
+            }
+            else
+            {
+                f << stringf(".%s %s", subckt_or_gate(cell->type.str()), cstr(cell->type));
+                for (auto &conn : cell->connections())
+                {
+                    if (conn.second.size() == 1) {
+                        f << stringf(" %s=%s", cstr(conn.first), cstr(conn.second[0]));
+                        continue;
+                    }
 
-				Module *m = design->module(cell->type);
-				Wire *w = m ? m->wire(conn.first) : nullptr;
+                    Module *m = design->module(cell->type);
+                    Wire *w = m ? m->wire(conn.first) : nullptr;
 
-				if (w == nullptr) {
-					for (int i = 0; i < GetSize(conn.second); i++)
-						f << stringf(" %s[%d]=%s", cstr(conn.first), i, cstr(conn.second[i]));
-				} else {
-					for (int i = 0; i < std::min(GetSize(conn.second), GetSize(w)); i++) {
-						SigBit sig(w, i);
-						f << stringf(" %s[%d]=%s", cstr(conn.first), sig.wire->upto ?
-								sig.wire->start_offset+sig.wire->width-sig.offset-1 :
-								sig.wire->start_offset+sig.offset, cstr(conn.second[i]));
-					}
-				}
-			}
-			f << stringf("\n");
+                    if (w == nullptr) {
+                        for (int i = 0; i < GetSize(conn.second); i++)
+                            f << stringf(" %s[%d]=%s", cstr(conn.first), i, cstr(conn.second[i]));
+                    } else {
+                        for (int i = 0; i < std::min(GetSize(conn.second), GetSize(w)); i++) {
+                            SigBit sig(w, i);
+                            f << stringf(" %s[%d]=%s", cstr(conn.first), sig.wire->upto ?
+                                    sig.wire->start_offset+sig.wire->width-sig.offset-1 :
+                                    sig.wire->start_offset+sig.offset, cstr(conn.second[i]));
+                        }
+                    }
+                }
+                f << stringf("\n");
+            }
 
 			if (config->cname_mode)
 				f << stringf(".cname %s\n", cstr(cell->name));
@@ -637,9 +645,19 @@ struct BlifBackend : public Backend {
 				config.noalias_mode = true;
 				continue;
 			}
+            if (args[argidx] == "-forabc") {
+                 config.write_ff_as_latches = true;
+                 continue;
+            }
 			break;
 		}
 		extra_args(f, filename, args, argidx);
+
+        if (config.write_ff_as_latches) {
+            config.impltf_mode = true;
+            config.gates_mode = true;
+            config.noalias_mode = true;
+        }
 
 		if (top_module_name.empty())
 			for (auto & mod_it:design->modules_)

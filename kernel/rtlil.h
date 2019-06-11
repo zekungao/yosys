@@ -1276,6 +1276,7 @@ public:
 	RTLIL::Module *module;
 	RTLIL::IdString name;
 	RTLIL::IdString type;
+	RTLIL::IdString simpleName; // added for the purpose of making gate names consistant in yosys-abc call
 	dict<RTLIL::IdString, RTLIL::SigSpec> connections_;
 	dict<RTLIL::IdString, RTLIL::Const> parameters;
 
