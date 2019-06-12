@@ -125,7 +125,7 @@ OBJS = kernel/version_$(GIT_REV).o
 # is just a symlink to your actual ABC working directory, as 'make mrproper'
 # will remove the 'abc' directory and you do not want to accidentally
 # delete your work on ABC..
-ABCREV = default
+ABCREV =  7a98ef0
 ABCPULL = 1
 ABCURL ?= https://github.com/scale-lab/abc.git
 ABCMKARGS = CC="$(CXX)" CXX="$(CXX)" ABC_USE_LIBSTDCXX=1
@@ -625,7 +625,7 @@ ifneq ($(ABCREV),default)
 		test $(ABCPULL) -ne 0 || { echo 'REEBE: NOP abg hc gb qngr naq NOPCHYY frg gb 0 va Znxrsvyr!' | tr 'A-Za-z' 'N-ZA-Mn-za-m'; exit 1; }; \
 		echo "Pulling ABC from $(ABCURL):"; set -x; \
 		test -d abc || git clone $(ABCURL) abc; \
-		cd abc && $(MAKE) DEP= clean && git fetch origin master && git checkout $(ABCREV); \
+		cd abc && $(MAKE) DEP= clean && git fetch origin master; \
 	fi
 endif
 	$(Q) rm -f abc/abc-[0-9a-f]*
