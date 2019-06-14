@@ -135,7 +135,8 @@ enabled by passing the -s flag to read_constr command in ABC.
 
 A snippet of code demonstrating the use case is as follows.
 ```
-abc -liberty mycells.lib -script +read_constr -s mySDC.sdc
+set abc_script  "+read_constr,-s,${constr_file};strash;ifraig;retime,-D,450,-M,6;strash;dch;map;"
+abc -liberty mycells.lib -script ${abc_script}
 ```
 
 Currently, while the parsing of all the sdc syntax is supported, due to
@@ -149,3 +150,6 @@ set_max_transition  #Support for global target slew
 ```
 
 We are working on adding support for other timing constraints in ABC.
+
+### Remark
+This Repo is currently maintained by Marina Neseem <marina_neseem@brown.edu> and Abdelrahman Hosny <abdelrahman_hosny@brown.edu>. Consider also Soheil Hashemi <soheil_hashemi@alumni.brown.edu> who has started this effort.
