@@ -83,6 +83,8 @@ std::map<RTLIL::SigBit, RTLIL::State> signal_init;
 bool recover_init;
 vector<shared_str> cstr_buf;
 dict<IdString, double> cell_area;
+std::vector<std::string> lef_files_list;
+
 
 bool clk_polarity, en_polarity;
 RTLIL::SigSpec clk_sig, en_sig;
@@ -165,94 +167,63 @@ void RunInnovus(std::string innovus_script, std::string tempdir_name, std::strin
     }
 }
 
-void RunFloorPlanner(std::string tempdir_name, std::string ntkName, std::string liberty_file, std::string constr_file, std::string lef_file, int die_height, int die_width)
+std::string FormDefGeneratorCommand(std::string defGenLocation, std::string tempdir_name, std::string ntkName, std::string liberty_file, int die_height, int die_width, int defDbu, std::string siteName)
 {
-    log("Running FloorPlanner.\n");
-
-    std::string pDir = "abc/tools/RePlAce/" + ntkName;
-    mkdir(pDir.c_str(), 0700);
-
-    std::string pCopyCommand;
-    pCopyCommand = "cp " + lef_file + " " + pDir;
-    if (system(pCopyCommand.c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
-    pCopyCommand = "cp " + liberty_file + " " + pDir;
-    if (system(pCopyCommand.c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
-    pCopyCommand = "cp " + tempdir_name + "/" + "netlist.v " + pDir + "/" + ntkName + "_gl.v";
-    if (system(pCopyCommand.c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
-
-    pCopyCommand = "cp " + constr_file + " " + pDir;
-    if (system(pCopyCommand.c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
-
     std::stringstream defGenCmd;
-    defGenCmd << "./abc/tools/defgenerator -lef " << lef_file;
-    defGenCmd << " -lib " << liberty_file << " -verilog " << pDir << "/" << ntkName << "_gl.v -defDbu 2000 -dieAreaInMicron 0 0 ";
-    defGenCmd << die_width << " " << die_height << " -siteName core -design netlist -def " << pDir << "/" << ntkName << ".def\n";
-
-    log(defGenCmd.str().c_str());
-    if (system(defGenCmd.str().c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
-
-    pCopyCommand = "python abc/tools/Incremental_def_writer/pins_placer.py -def " + pDir + "/" + ntkName + ".def -output " + pDir + "/" + ntkName + ".def\n";
-    log(pCopyCommand.c_str());
-    if (system(pCopyCommand.c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
+    defGenCmd << defGenLocation;
+    for(unsigned int i = 0; i < lef_files_list.size(); i++)
+        defGenCmd << " -lef " << lef_files_list.at(i);
+    defGenCmd << " -lib " << liberty_file << " -verilog " << tempdir_name << "/netlist.v -defDbu " << defDbu << " -dieAreaInMicron 0 0 ";
+    defGenCmd << die_width << " " << die_height << " -siteName " << siteName << " -design netlist -def " << tempdir_name << "/" << ntkName << ".def\n";
+    return defGenCmd.str();
 }
 
-void RunReplace(std::string tempdir_name, std::string ntkName, std::string outSpefFilePath, float res_per_micron, float cap_per_micron)
+std::string FormPinsPlacerCommand(std::string pinsPlacerLocation, std::string tempdir_name, std::string ntkName)
 {
-    log("Running Replace.\n");
+    std::stringstream pinPlacerCmd;
+    pinPlacerCmd << "python " << pinsPlacerLocation << " -def " << tempdir_name << "/" << ntkName + ".def -output " << tempdir_name << "/" << ntkName << ".def\n";
+    return pinPlacerCmd.str();
+}
 
-    std::string pCopyCommand = "rm -rf abc/tools/RePlAce/output/etc/" + ntkName;
-    if (system(pCopyCommand.c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
-
+std::string FormReplaceCommand(std::string replaceLocation, std::string tempdir_name, std::string ntkName, float res_per_micron, float cap_per_micron,
+                std::string liberty_file, std::string constr_file, std::string out_loc, std::string dpflag, std::string dploc)
+{
     std::stringstream replaceCmd;
-    replaceCmd << "(cd abc/tools/RePlAce && python execute_lefdef.py " << ntkName;
-    replaceCmd << " -onlyDP -unitY 1200 -capPerMicron " << cap_per_micron << " -resPerMicron " << res_per_micron << " -timing)";
-    if (system(replaceCmd.str().c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",replaceCmd.str().c_str());
-        log_abort();
-    }
-
-    // copy the spef output to abc/tools/spef_output/
-    pCopyCommand = "cp abc/tools/RePlAce/output/etc/" + ntkName + "/experiment000/*.spef " + outSpefFilePath;
-    if (system(pCopyCommand.c_str()) == -1)
-    {
-        log_cmd_error("System call \"%s\" failed!\n",pCopyCommand.c_str());
-        log_abort();
-    }
-
+    replaceCmd << replaceLocation << " -bmflag etc -def " << tempdir_name << "/" << ntkName << ".def";
+    for(unsigned int i = 0; i < lef_files_list.size(); i++)
+        replaceCmd << " -lef " << lef_files_list.at(i);
+    replaceCmd << " -verilog " << tempdir_name << "/netlist.v -lib " << liberty_file << " -sdc " << constr_file;
+    replaceCmd << " -output " << out_loc << " -t 1 -dpflag " << dpflag << " -dploc " << dploc << " -onlyDP -unitY 1200 -capPerMicron " << cap_per_micron << " -resPerMicron " << res_per_micron << " -timing";
+    return replaceCmd.str();
 }
-void FloorPlanandPlace(std::string tempdir_name, std::string innovus_script, std::string ntkName, double module_area, std::string liberty_file, std::string constr_file, std::string lef_file, float res_per_micron, float cap_per_micron, int die_height, int die_width)
+
+std::string FormReplaceCleanCommand(std::string ntkName, std::string out_loc)
 {
-    // Prepare for the SPEF out directory
-    std::string pDir = "abc/tools/spef_output/";
+    std::stringstream copyCommand;
+    copyCommand << "rm -rf " << out_loc << "/etc/" << ntkName;
+    return copyCommand.str();
+}
+
+std::string FormSpefCopyCommand(std::string ntkName, std::string out_loc)
+{
+    std::stringstream copyCommand;
+    copyCommand << "cp " << out_loc << "/etc/" << ntkName << "/experiment000/*.spef spef_output/netlist.spef";
+    return copyCommand.str();
+}
+
+void RunCommand (std::string command)
+{
+    log(command.c_str());
+    if (system(command.c_str()) != 0)
+    {
+        log_cmd_error("System call \"%s\" failed!\n",command.c_str());
+        log_abort();
+    }
+}
+
+void FloorPlanandPlace(std::string tempdir_name, std::string innovus_script, std::string defGenCommand, std::string pinsPlacerCommand, std::string replaceCommand, std::string spefCopyCommand, std::string replaceCleanCommand)
+{
+    std::string pDir = "spef_output/";
     struct stat statbuf;
     if(stat(pDir.c_str(),&statbuf) != -1)
     {
@@ -262,17 +233,45 @@ void FloorPlanandPlace(std::string tempdir_name, std::string innovus_script, std
     }
     mkdir(pDir.c_str(), 0700);
 
-    std::string outSpefFilePath = pDir + "netlist_gp.spef";
+    std::string outSpefFilePath = pDir + "netlist.spef";
     if(innovus_script != "")
     {
         RunInnovus(innovus_script,tempdir_name,outSpefFilePath);
     }
     else
     {
-        RunFloorPlanner(tempdir_name, ntkName, liberty_file, constr_file, lef_file, die_height, die_width);
-        RunReplace(tempdir_name, ntkName, outSpefFilePath, res_per_micron, cap_per_micron);
+        RunCommand(replaceCleanCommand);
+        RunCommand(defGenCommand);
+        RunCommand(pinsPlacerCommand);
+        RunCommand(replaceCommand);
+        RunCommand(spefCopyCommand);
     }
 }
+
+/*
+double calculateModuleArea(RTLIL::Module *module, RTLIL::Design *design)
+{
+    double module_area = 0;
+    for (auto &it : module->cells_)
+    {
+        if (!design->selected(module, it.second))
+            continue;
+
+        RTLIL::IdString cell_type = it.second->type;
+
+        if (!cell_area.empty()) {
+            if (cell_area.count(cell_type))
+            {
+                module_area += cell_area.at(cell_type);
+            }
+            else{
+                log("Area for cell type %s is unknown! Cell not counted toward total area!\n", cell_type.c_str());
+            }
+        }
+    }
+    return module_area;
+}
+*/
 
 const char *cstr(RTLIL::IdString id)
 {
@@ -283,28 +282,6 @@ const char *cstr(RTLIL::IdString id)
     cstr_buf.push_back(str);
     return cstr_buf.back().c_str();
 }
-
-const char *cstr(RTLIL::SigBit sig)
-{
-    if (sig.wire == NULL) {
-        if (sig == RTLIL::State::S0) return "$false";
-        if (sig == RTLIL::State::S1) return "$true";
-        return "$undef";
-    }
-
-    std::string str = RTLIL::unescape_id(sig.wire->name);
-    for (size_t i = 0; i < str.size(); i++)
-        if (str[i] == '#' || str[i] == '=' || str[i] == '<' || str[i] == '>')
-            str[i] = '?';
-
-    if (sig.wire->width != 1)
-        str += stringf("[%d]", sig.wire->upto ? sig.wire->start_offset+sig.wire->width-sig.offset-1 : sig.wire->start_offset+sig.offset);
-
-    cstr_buf.push_back(str);
-    return cstr_buf.back().c_str();
-}
-
-
 
 void dump_const(std::ostream &f, const RTLIL::Const &data, int width = -1, int offset = 0, bool no_decimal = false, bool set_signed = false, bool escape_comment = false)
 {
@@ -820,8 +797,8 @@ struct abc_output_filter
 };
 
 void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::string script_file, std::string innovus_script_file, std::string exe_file,
-        std::string liberty_file, std::string constr_file, bool cleanup, std::string clk_str,
-        std::string delay_target, const std::vector<RTLIL::Cell*> &cells, bool show_tempdir, bool phys_mode, std::string clk_port, int die_height, int die_width, std::string lef_file, float res_per_micron, float cap_per_micron)
+        std::string liberty_file, std::string constr_file, bool cleanup, std::string clk_str, const std::vector<RTLIL::Cell*> &cells, bool show_tempdir,
+        bool phys_mode, std::string clk_port,std::string defGenCommand, std::string pinsPlacerCommand, std::string replaceCommand, std::string spefCopyCommand, std::string replaceCleanCommand, std::string tempdir_name)
 {
     module = current_module;
     map_autoidx = autoidx++;
@@ -841,10 +818,6 @@ void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::strin
         en_sig = RTLIL::SigSpec();
     }
 
-    std::string tempdir_name = "/tmp/yosys-abc-XXXXXX";
-    if (!cleanup)
-        tempdir_name[0] = tempdir_name[4] = '_';
-    tempdir_name = make_temp_dir(tempdir_name);
     log_header(design, "Extracting gate netlist of module `%s' to `%s/input.blif'..\n",
             module->name.c_str(), replace_tempdir(tempdir_name, tempdir_name, show_tempdir).c_str());
 
@@ -914,32 +887,8 @@ void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::strin
         fprintf(f, "%s\n", v_sstr.str().c_str());
         fclose(f);
 
-
-        // Run Replace and FP
-
-        // Step 0B: Calculate design area
-        double module_area = 0;
-
-        for (auto &it : module->cells_)
-        {
-            if (!design->selected(module, it.second))
-                continue;
-
-            RTLIL::IdString cell_type = it.second->type;
-
-            if (!cell_area.empty()) {
-                if (cell_area.count(cell_type))
-                {
-                    module_area += cell_area.at(cell_type);
-                }
-                else{
-                    log("Area for cell type %s is unknown! Cell not counted toward total area!\n", cell_type.c_str());
-                }
-            }
-        }
-
-        FloorPlanandPlace(tempdir_name, innovus_script_file, log_id(module->name), module_area, liberty_file, constr_file, lef_file, res_per_micron, cap_per_micron, die_height, die_width);
-
+        // Run DefGenerator, Pin Placer and Replace
+        FloorPlanandPlace(tempdir_name, innovus_script_file, defGenCommand, pinsPlacerCommand, replaceCommand, spefCopyCommand, replaceCleanCommand);
     }
 
     for (auto c : cells){
@@ -1157,15 +1106,11 @@ struct Phys_abcPass : public Pass {
         log("        leading plus sign is removed and all commas (,) in the string are\n");
         log("        replaced with blanks before the string is passed to ABC.\n");
         log("\n");
-        log("        if no -script parameter is given, the following scripts are used:\n");
+        log("        if no -script parameter is given, the following script is used in case physical synthesis flow is not enabled:\n");
+        log("%s\n", fold_abc_cmd(ABC_DBU).c_str());
+        log("        and this script is used id physical synthesis flow is enabled:\n");
         log("\n");
-        log("        for -liberty without -constr:\n");
         log("%s\n", fold_abc_cmd(ABC_DXBXUX).c_str());
-        log("\n");
-        log("    -innovus_script <file>\n");
-        log("        use the specified Innovus script for floor planning and placement.\n");
-        log("        The script shouldn't contain \"set init_verilog\" as it is set internally by yosys.\n");
-        log("        if this flag is not set, RePlace is used instead.\n");
         log("\n");
         log("    -liberty <file>\n");
         log("        generate netlists for the specified cell library (using the liberty\n");
@@ -1188,18 +1133,6 @@ struct Phys_abcPass : public Pass {
         log("        this also replaces 'dretime' with 'dretime; retime -o {D}' in the\n");
         log("        default scripts above.\n");
         log("\n");
-        log("    -I <num>\n");
-        log("        maximum number of SOP inputs.\n");
-        log("        (replaces {I} in the default scripts above)\n");
-        log("\n");
-        log("    -P <num>\n");
-        log("        maximum number of SOP products.\n");
-        log("        (replaces {P} in the default scripts above)\n");
-        log("\n");
-        log("    -S <num>\n");
-        log("        maximum number of LUT inputs shared.\n");
-        log("        (replaces {S} in the default scripts above, default: -S 1)\n");
-        log("\n");
         log("    -nocleanup\n");
         log("        when this option is used, the temporary files created by this pass\n");
         log("        are not removed. this is useful for debugging.\n");
@@ -1220,7 +1153,82 @@ struct Phys_abcPass : public Pass {
         log("        Do not use the physical flow. Yosys will not pass -x flags to ABC.\n");
         log("        This flag is only relevant if no -script flag is used.\n");
         log("\n");
+        log("    -innovus_script <file>\n");
+        log("        use the specified Innovus script for floor planning and placement.\n");
+        log("        The script shouldn't contain \"set init_verilog\" as it is set internally by yosys.\n");
+        log("        if this flag is not set, RePlace is used instead.\n");
+        log("\n");
+        log("    -RePlAce\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it should be set to RePlAce binary location,\n");
+        log("        Source code for RePlAce can be found at [2].\n");
+        log("\n");
+        log("    -DefGenerator\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it should be set to the DefGenerator binary location.\n");
+        log("        Source code for Def translator can be found at [4].\n");
+        log("\n");
+        log("    -PinsPlacer\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it should be set to the PinsPlacer file location,\n");
+        log("        it can be downloaded from [6].\n");
+        log("\n");
+        log("    -dpflag\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies which Detailed Placer will be used by RePlAce,\n");
+        log("        for more information check [3].\n");
+        log("\n");
+        log("    -dploc\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the location of the Detailed Placer that is needed by RePlAce,\n");
+        log("        for more information check [3].\n");
+        log("\n");
+        log("    -output\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the location of the output by RePlAce,\n");
+        log("        for more information check [3].\n");
+        log("\n");
+        log("    -lef\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the location of the lef files,\n");
+        log("        for more information check [3].\n");
+        log("\n");
+        log("    -res_per_micron\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the resistance per micron in ohm,\n");
+        log("        for more information check [3].\n");
+        log("\n");
+        log("    -cap_per_micron\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the capacitance per micron in farad,\n");
+        log("        for more information check [3].\n");
+        log("\n");
+        log("    -die_width\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the die width in micron,\n");
+        log("        for more information check [5].\n");
+        log("\n");
+        log("    -die_height\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the die height in micron,\n");
+        log("        for more information check [5].\n");
+        log("\n");
+        log("    -defDbu\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies the Database Units for DEF generated by the defgenerator,\n");
+        log("        for more information check [5].\n");
+        log("\n");
+        log("    -siteName\n");
+        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
+        log("        it specifies row name in the lef files,\n");
+        log("        for more information check [5].\n");
+        log("\n");
         log("[1] http://www.eecs.berkeley.edu/~alanmi/abc/\n");
+        log("[2] https://github.com/abk-openroad/RePlAce\n");
+        log("[3] https://github.com/abk-openroad/RePlAce/blob/master/doc/BinaryArguments.md\n");
+        log("[4] https://github.com/abk-openroad/OpenROAD-Utilities/tree/master/verilog-to-def\n");
+        log("[5] https://github.com/abk-openroad/OpenROAD-Utilities/blob/master/verilog-to-def/doc/BinaryArguments.md\n");
+        log("[6] https://github.com/scale-lab/yosys/tree/master/tools/Def_Analyzer\n");
         log("\n");
     }
     void execute(std::vector<std::string> args, RTLIL::Design *design) YS_OVERRIDE
@@ -1240,14 +1248,14 @@ struct Phys_abcPass : public Pass {
 #else
         std::string exe_file = proc_self_dirname() + "yosys-abc";
 #endif
-        std::string script_file, innovus_script_file, liberty_file, constr_file, clk_str, clk_port, lef_file;
-        std::string delay_target;
+        std::string script_file, innovus_script_file, liberty_file, constr_file, clk_str, clk_port, replace_output_folder, dpFlag, dpLocation, defGenLocation, replaceLocation, pinsPlacerLocation;
+        std::string delay_target, siteName;
         bool cleanup = true;
         bool show_tempdir = false;
         bool phys_mode = true;
         markgroups = false;
-        int die_width, die_height;
-        float res_per_micron, cap_per_micron;
+        int die_width = 0, die_height = 0, defDbu = 0;
+        float res_per_micron = 0, cap_per_micron = 0;
 
 #ifdef _WIN32
 #ifndef ABCEXTERNAL
@@ -1298,10 +1306,11 @@ struct Phys_abcPass : public Pass {
                 continue;
             }
             if (arg == "-lef" && argidx+1 < args.size()) {
+                std::string lef_file = args[++argidx];
                 rewrite_filename(lef_file);
-                lef_file = args[++argidx];
                 if (!lef_file.empty() && !is_absolute_path(lef_file))
                     lef_file = std::string(pwd) + "/" + lef_file;
+                lef_files_list.push_back(lef_file);
                 continue;
             }
             if (arg == "-D" && argidx+1 < args.size()) {
@@ -1310,31 +1319,30 @@ struct Phys_abcPass : public Pass {
             }
             if (arg == "-die_width" && argidx+1 < args.size()) {
                 std::string temp = args[++argidx];
-                if(!std::stoi(temp))
-                    log_error("die_width should be an integer.\n");
+                if(!std::stoi(temp) || std::stoi(temp) <= 0)
+                    log_error("die_width should be a positive integer.\n");
                 die_width = std::stoi(temp);
                 continue;
             }
             if (arg == "-die_height" && argidx+1 < args.size()) {
                 std::string temp = args[++argidx];
-                if(!std::stoi(temp))
-                    log_error("die_height should be an integer.\n");
+                if(!std::stoi(temp) || std::stoi(temp) <= 0)
+                    log_error("die_height should be a positive integer.\n");
                 die_height = std::stoi(temp);
                 continue;
             }
             if (arg == "-res_per_micron" && argidx+1 < args.size()) {
                 std::string temp = args[++argidx];
-                if(!std::stof(temp))
-                    log_error("res_per_micron should be a float number.\n");
+                if(!std::stof(temp) || std::stof(temp) <= 0)
+                    log_error("res_per_micron should be a positive float number.\n");
                 res_per_micron = std::stof(temp);
                 continue;
             }
             if (arg == "-cap_per_micron" && argidx+1 < args.size()) {
                 std::string temp = args[++argidx];
-                if(!std::stof(temp))
-                    log_error("cap_per_micron should be a float number.\n");
+                if(!std::stof(temp) || std::stof(temp) <= 0)
+                    log_error("cap_per_micron should be a positive float number.\n");
                 cap_per_micron = std::stof(temp);
-                std::cout << temp << " " << cap_per_micron << std::endl;
                 continue;
             }
             if (arg == "-nocleanup") {
@@ -1357,19 +1365,102 @@ struct Phys_abcPass : public Pass {
                 clk_port = args[++argidx];
                 continue;
             }
+            if (arg == "-dpflag" && argidx+1 < args.size()) {
+                dpFlag = args[++argidx];
+                continue;
+            }
+            if (arg == "-dploc" && argidx+1 < args.size()) {
+                dpLocation = args[++argidx];
+                continue;
+            }
+            if (arg == "-output" && argidx+1 < args.size()) {
+                replace_output_folder = args[++argidx];
+                continue;
+            }
+            if (arg == "-RePlAce" && argidx+1 < args.size()) {
+                replaceLocation = args[++argidx];
+                continue;
+            }
+            if (arg == "-DefGenerator" && argidx+1 < args.size()) {
+                defGenLocation = args[++argidx];
+                continue;
+            }
+            if (arg == "-PinsPlacer" && argidx+1 < args.size()) {
+                pinsPlacerLocation = args[++argidx];
+                continue;
+            }
+            if (arg == "-defDbu" && argidx+1 < args.size()) {
+                std::string temp = args[++argidx];
+                if(!std::stoi(temp) || std::stoi(temp) <= 0)
+                    log_error("defDbu should be a positive integer number.\n");
+                defDbu = std::stoi(temp);
+                continue;
+            }
+            if (arg == "-siteName" && argidx+1 < args.size()) {
+                siteName = args[++argidx];
+                continue;
+            }
             break;
         }
         extra_args(args, argidx, design);
 
+        // Parameters Check
         if (!constr_file.empty() && liberty_file.empty())
-            log_cmd_error("Got -constr but no -liberty!\n");
+            log_error("Got -constr but no -liberty!\n");
 
         if (clk_port.empty())
-            log_cmd_error("-clk_port should be set.n");
+            log_error("-clk_port should be set.\n");
+
+        if(phys_mode && innovus_script_file.empty())
+        {
+            if(liberty_file.empty())
+                log_error("-liberty option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(constr_file.empty())
+                log_error("-constr option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(replaceLocation.empty())
+                log_error("-RePlAce option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(defGenLocation.empty())
+                log_error("-DefGenerator option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(pinsPlacerLocation.empty())
+                log_error("-PinsPlacer option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(dpFlag.empty())
+                log_error("-dpflag option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(dpLocation.empty())
+                log_error("-dploc option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(replace_output_folder.empty())
+                log_error("-output option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(lef_files_list.empty())
+                log_error("-lef option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(res_per_micron == 0)
+                log_error("-res_per_micron option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(cap_per_micron == 0)
+                log_error("-cap_per_micron option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(die_width == 0)
+                log_error("-die_width option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(die_height == 0)
+                log_error("-die_height option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(defDbu == 0)
+                log_error("-defDbu option should be set to run the Physical Synthesis flow using RePlAce.\n");
+
+            if(siteName.empty())
+                log_error("-siteName option should be set to run the Physical Synthesis flow using RePlAce.\n");
+        }
 
         for (auto mod : design->selected_modules())
         {
-
             if (mod->processes.size() > 0) {
                 log("Skipping module %s as it contains processes.\n", log_id(mod));
                 continue;
@@ -1378,9 +1469,30 @@ struct Phys_abcPass : public Pass {
             assign_map.set(mod);
             signal_init.clear();
 
-            abc_module(design, mod, script_file, innovus_script_file, exe_file, liberty_file, constr_file, cleanup, clk_str,
-                    delay_target, mod->selected_cells(), show_tempdir, phys_mode, clk_port, die_height, die_width, lef_file, res_per_micron, cap_per_micron);
+            // Create a temp directory
+            std::string tempdir_name = "/tmp/yosys-abc-XXXXXX";
+            if (!cleanup)
+                tempdir_name[0] = tempdir_name[4] = '_';
+            tempdir_name = make_temp_dir(tempdir_name);
 
+            std::string defGenCommand;
+            std::string pinsPlacerCommand;
+            std::string replaceCommand;
+            std::string spefCopyCommand;
+            std::string replaceCleanCommand;
+
+            // prepare commands for Physical Synthesis Flow
+            if(phys_mode && innovus_script_file.empty())
+            {
+                defGenCommand = FormDefGeneratorCommand(defGenLocation, tempdir_name,log_id(mod->name),liberty_file,die_height,die_width,defDbu, siteName);
+                pinsPlacerCommand = FormPinsPlacerCommand(pinsPlacerLocation, tempdir_name,log_id(mod->name));
+                replaceCommand = FormReplaceCommand(replaceLocation, tempdir_name,log_id(mod->name), res_per_micron, cap_per_micron,liberty_file,constr_file,replace_output_folder,dpFlag,dpLocation);
+                spefCopyCommand = FormSpefCopyCommand(log_id(mod->name),replace_output_folder);
+                replaceCleanCommand = FormReplaceCleanCommand(log_id(mod->name), replace_output_folder);
+            }
+
+            abc_module(design, mod, script_file, innovus_script_file, exe_file, liberty_file, constr_file, cleanup, clk_str,
+                       mod->selected_cells(), show_tempdir, phys_mode, clk_port, defGenCommand,pinsPlacerCommand,replaceCommand,spefCopyCommand,replaceCleanCommand,tempdir_name);
         }
 
         assign_map.clear();
