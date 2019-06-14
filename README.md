@@ -135,7 +135,8 @@ enabled by passing the -s flag to read_constr command in ABC.
 
 A snippet of code demonstrating the use case is as follows.
 ```
-set abc_script  "+read_constr,-s,${constr_file};strash;ifraig;retime,-D,450,-M,6;strash;dch;map;"
+set constr_file myfile.sdc
+set abc_script "+read_constr,-s,${constr_file};strash;ifraig;retime,-D,450,-M,6;strash;dch;map;"
 abc -liberty mycells.lib -script ${abc_script}
 ```
 
