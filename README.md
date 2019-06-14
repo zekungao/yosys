@@ -57,6 +57,8 @@ This is a fork and extension from open-source yosys tool as available here:
 
 Along with the standard functionality provided by yosys, Physical yosys aims to add support for physical aware logic synthesis, and better timing constraint handling through ABC. 
 
+The used ABC version is a forked and modified version that could be found [here](https://github.com/scale-lab/abc).
+
 Physical Yosys along with Yosys is free software licensed under the ISC license (a GPL compatible license that is similar in terms to the MIT license or the 2-clause BSD license).
 
 
