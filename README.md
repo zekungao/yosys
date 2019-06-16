@@ -153,4 +153,5 @@ set_max_transition  #Support for global target slew
 We are working on adding support for other timing constraints in ABC.
 
 ### Remark
-This Repo is currently maintained by Marina Neseem <marina_neseem@brown.edu> and Abdelrahman Hosny <abdelrahman_hosny@brown.edu>. Consider also Soheil Hashemi <soheil_hashemi@alumni.brown.edu> who has started this effort.
+This Repo is currently maintained by Marina Neseem <marina_neseem@brown.edu>.
+Consider also Soheil Hashemi <soheil_hashemi@alumni.brown.edu> who has started this effort.
