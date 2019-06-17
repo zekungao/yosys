@@ -116,7 +116,7 @@ abc -liberty mycells.lib
 opt_clean -purge
 
 #enabling physical flow
-phys_abc -liberty mycell s.lib -clk_port CLK -RePlAce ... -lef file1.lef -lef file2.lef 
+phys_abc -liberty mycell s.lib -clk_port CLK -RePlAce ... -lef file1.lef -lef file2.lef -constr myfile.sdc
 -res_per_micron 1.261261 -cap_per_micron 0.226596e-15 -output output -dpflag ... -dploc ... 
 -PinsPlacer ... -DefGenerator ... -defDbu 2000 -siteName ... -die_width 42 -die_height 42
 
@@ -128,12 +128,27 @@ write_verilog test_netlist.v
 ```
 
 ### Timing Constraints Through SDC Files
-Physical yosys has added support for SDF file parsing through synopsys
+Physical yosys has added support for SDC file parsing through synopsys
 open source sdc parser. The parser is integrated into ABC, enabling passing
-of timing constraints through standard sdc syntax. the SDC parser in 
-enabled by passing the -s flag to read_constr command in ABC.
+of timing constraints through standard sdc syntax.
 
-A snippet of code demonstrating the use case is as follows.
+This works with both `abc` and `phys_abc` commands.
+
+Generally, Yosys itself doesn't use the SDC file, It just passes it to ABC,
+so the SDC parser can be enabled by one of two methods:
+
+1. Through Yosys by adding the `-s` flag after the `-constr` flag in `abc` or `phys_abc` command, and Yosys will pass it to ABC.
+	
+2. Through ABC directly by adding `-s` flag to `read_constr` command in the ABC script.
+
+If `-s` flag was not added, the typical constraints parser of ABC (non SDC) will be used.
+
+A snippet of code demonstrating the use case of the SDC Parser in Yosys is as follows:
+```
+abc -liberty mycells.lib -script ${abc_script} -constr -s myfile.sdc
+```
+
+A snippet of code demonstrating the use case of the SDC Parser in ABC is as follows:
 ```
 set constr_file myfile.sdc
 set abc_script "+read_constr,-s,${constr_file};strash;ifraig;retime,-D,450,-M,6;strash;dch;map;"
@@ -142,7 +157,7 @@ abc -liberty mycells.lib -script ${abc_script}
 
 Currently, while the parsing of all the sdc syntax is supported, due to
 limited support of ABC for timing constraints, very few timing constraints 
-are realized by ABC, while the rest are mainly ignored.
+are realized by ABC, while the rest are mainly **Ignored**.
 The current list of supported timing constraints include:
 ```
 create_clock        #Support for target clock period
