@@ -824,7 +824,8 @@ struct abc_output_filter
 
 void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::string script_file, std::string innovus_script_file, std::string exe_file,
         std::string liberty_file, std::string constr_file, bool cleanup, std::string clk_str, const std::vector<RTLIL::Cell*> &cells, bool show_tempdir,
-        bool phys_mode, std::string clk_port,std::string defGenCommand, std::string pinsPlacerCommand, std::string replaceCommand, std::string spefCopyCommand, std::string replaceCleanCommand, std::string tempdir_name)
+        bool phys_mode, std::string clk_port,std::string defGenCommand, std::string pinsPlacerCommand, std::string replaceCommand, std::string spefCopyCommand,
+        std::string replaceCleanCommand, std::string tempdir_name, bool enable_tcl_sdc_parser)
 {
     module = current_module;
     map_autoidx = autoidx++;
@@ -852,7 +853,10 @@ void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::strin
     abc_script += stringf("read_blif %s/input.blif; ", tempdir_name.c_str());
 
     if (!constr_file.empty())
-        abc_script += stringf("read_constr -v %s; ", constr_file.c_str());
+        if(enable_tcl_sdc_parser)
+            abc_script += stringf("read_constr -s %s; ", constr_file.c_str());
+        else
+            abc_script += stringf("read_constr -v %s; ", constr_file.c_str());
 
     if (!script_file.empty()) {
         if (script_file[0] == '+') {
@@ -1279,6 +1283,7 @@ struct Phys_abcPass : public Pass {
         bool cleanup = true;
         bool show_tempdir = false;
         bool phys_mode = true;
+        bool enable_tcl_sdc_parser = false;
         markgroups = false;
         int die_width = 0, die_height = 0, defDbu = 0;
         float res_per_micron = 0, cap_per_micron = 0;
@@ -1327,6 +1332,11 @@ struct Phys_abcPass : public Pass {
             if (arg == "-constr" && argidx+1 < args.size()) {
                 rewrite_filename(constr_file);
                 constr_file = args[++argidx];
+                if(constr_file == "-s")
+                {
+                    enable_tcl_sdc_parser = true;
+                    constr_file = args[++argidx];
+                }
                 if (!constr_file.empty() && !is_absolute_path(constr_file))
                     constr_file = std::string(pwd) + "/" + constr_file;
                 continue;
@@ -1518,7 +1528,7 @@ struct Phys_abcPass : public Pass {
             }
 
             abc_module(design, mod, script_file, innovus_script_file, exe_file, liberty_file, constr_file, cleanup, clk_str,
-                       mod->selected_cells(), show_tempdir, phys_mode, clk_port, defGenCommand,pinsPlacerCommand,replaceCommand,spefCopyCommand,replaceCleanCommand,tempdir_name);
+                       mod->selected_cells(), show_tempdir, phys_mode, clk_port, defGenCommand,pinsPlacerCommand,replaceCommand,spefCopyCommand,replaceCleanCommand,tempdir_name,enable_tcl_sdc_parser);
         }
 
         assign_map.clear();
