@@ -31,6 +31,8 @@
 #	else the component is placed in the centroid of its fanins and fanouts
 # ---------------------------------------------------------------------------------------
 
+#!/usr/bin/env python3
+
 import sys
 from utils import *
 from merger import *

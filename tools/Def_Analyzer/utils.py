@@ -26,6 +26,8 @@
 # output: map
 # ------------------------------------------------------------------
 
+#!/usr/bin/env python3
+
 def extract_components_section(file_name,components_map):
 	inComponentsSection = False
 	f = open (file_name,"r")

@@ -29,6 +29,9 @@
 # Output:
 #		merged_components_map: map with a merged def
 # ------------------------------------------------------------------
+
+#!/usr/bin/env python3
+
 from utils import get_connected_components
 
 def merge_defs(placed_components_map,placed_pins_map,unplaced_components_map,unplaced_nets_map,merged_components_map):

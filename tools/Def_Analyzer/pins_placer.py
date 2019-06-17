@@ -26,6 +26,8 @@
 # It writes a def with the placed Pins
 # ---------------------------------------------------------------------------------------
 
+#!/usr/bin/env python3
+
 import sys
 from utils import *
 
