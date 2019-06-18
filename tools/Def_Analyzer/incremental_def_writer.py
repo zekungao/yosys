@@ -38,74 +38,74 @@ from utils import *
 from merger import *
 
 def print_Usage():
-	print("USAGE: ")
-	print("      python incremental_def_writer.py -placed file1.def -unplaced file2.def -output output.def\n")
+    print("USAGE: ")
+    print("      python incremental_def_writer.py -placed file1.def -unplaced file2.def -output output.def\n")
 
 def execute():
-	if(len(sys.argv) != 7):
-		print("\nERROR: Missing or Unknown Arguments.")
-		print_Usage()
-		return
-		
-	i = 1
-	while i < 7:
-		if sys.argv[i] == "incremental_def_writer.py":
-				continue
-		elif sys.argv[i] == "-placed":
-				placed_def = sys.argv[i+1]
-				i +=1
-		elif sys.argv[i] == "-unplaced":
-				unplaced_def = sys.argv[i+1]
-				i +=1
-		elif sys.argv[i] == "-output":
-				output_def = sys.argv[i+1]
-				i +=1
-		else:
-			print("\nERROR: Missing or Unknown Arguments.")
-			print_Usage()
-			return
-		i += 1
+    if(len(sys.argv) != 7):
+        print("\nERROR: Missing or Unknown Arguments.")
+        print_Usage()
+        return
+        
+    i = 1
+    while i < 7:
+        if sys.argv[i] == "incremental_def_writer.py":
+            continue
+        elif sys.argv[i] == "-placed":
+            placed_def = sys.argv[i+1]
+            i +=1
+        elif sys.argv[i] == "-unplaced":
+            unplaced_def = sys.argv[i+1]
+            i +=1
+        elif sys.argv[i] == "-output":
+            output_def = sys.argv[i+1]
+            i +=1
+        else:
+            print("\nERROR: Missing or Unknown Arguments.")
+            print_Usage()
+            return
+        i += 1
 
-	placed_components_map = {}
-	unplaced_components_map = {}
-	unplaced_nets_map = {}
-	merged_components_map = {}
-	placed_pins_map = {}
+    placed_components_map = {}
+    unplaced_components_map = {}
+    unplaced_nets_map = {}
+    merged_components_map = {}
+    placed_pins_map = {}
 
-	# Extract Data from unplaced DEF
+    # Extract Data from unplaced DEF
 
-	# Copy Intro Section
-	intro_section = copy_intro_section(placed_def)
+    # Copy Intro Section
+    intro_section = copy_intro_section(placed_def)
 
-	# Extract Components Section data into data structures
-	extract_components_section(unplaced_def,unplaced_components_map)
+    # Extract Components Section data into data structures
+    extract_components_section(unplaced_def,unplaced_components_map)
 
-	# Extract some data from Pins Sections into data structures and copy it as well
-	extract_Pins_section(unplaced_def,placed_pins_map)
-	pins_section = copy_pins_section(unplaced_def)
+    # Extract some data from Pins Sections into data structures and copy it as well
+    extract_Pins_section(unplaced_def,placed_pins_map)
+    pins_section = copy_pins_section(unplaced_def)
 
-	# Extract Nets Sections data into data structures
-	extract_nets_section(unplaced_def,unplaced_nets_map)
-	nets_section = copy_nets_section(unplaced_def)
-	# Copy Exit Section
-	exit_section = copy_exit_section(unplaced_def)
+    # Extract Nets Sections data into data structures
+    extract_nets_section(unplaced_def,unplaced_nets_map)
+    nets_section = copy_nets_section(unplaced_def)
+    # Copy Exit Section
+    exit_section = copy_exit_section(unplaced_def)
 
-	# Extract Components from placed DEF
-	extract_components_section(placed_def,placed_components_map)
-
-
-	# Merge the 2 Defs:
-	merge_defs(placed_components_map,placed_pins_map,unplaced_components_map,unplaced_nets_map,merged_components_map)
+    # Extract Components from placed DEF
+    extract_components_section(placed_def,placed_components_map)
 
 
-	# Write DEF
-	paste_intro_section(output_def,intro_section)
-	save_components_section(output_def,merged_components_map)
-	paste_pins_section(output_def,pins_section)
-	paste_nets_section(output_def,nets_section)
-	paste_exit_section(output_def,exit_section)
-	print("SUCCESSFULLY WRITE DEF FILE INTO "),
-	print(output_def)
+    # Merge the 2 Defs:
+    merge_defs(placed_components_map,placed_pins_map,unplaced_components_map,unplaced_nets_map,merged_components_map)
+
+
+    # Write DEF
+    paste_intro_section(output_def,intro_section)
+    save_components_section(output_def,merged_components_map)
+    paste_pins_section(output_def,pins_section)
+    paste_nets_section(output_def,nets_section)
+    paste_exit_section(output_def,exit_section)
+    print("SUCCESSFULLY WRITE DEF FILE INTO "),
+    print(output_def)
 
 # call
 execute()
