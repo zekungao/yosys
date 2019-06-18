@@ -43,100 +43,100 @@ units_per_micron = 2000
 # ------------------------------------------
 
 def place_pins(pins_map,dim_w,dim_h):
-	io_count = len(pins_map)
-	step = int(2*(dim_w + dim_h)/io_count)
-	step = int(0.9*step)
-	count = 1
-	direction = 1 
-	x = 0
- 	y = 0
+    io_count = len(pins_map)
+    step = int(2*(dim_w + dim_h)/io_count)
+    step = int(0.9*step)
+    count = 1
+    direction = 1 
+    x = 0
+    y = 0
 
-	#       PINS PLACEMENT
-	#       
-	#        ___dir4____(dim_w,dim_h)
-	#       |           |
-	#       |           |
-	#    dir1           dir3
-	#       |           |
-	#       |___________|
-	#   (0,0)   dir2
+    #       PINS PLACEMENT
+    #       
+    #        ___dir4____(dim_w,dim_h)
+    #       |           |
+    #       |           |
+    #    dir1           dir3
+    #       |           |
+    #       |___________|
+    #   (0,0)   dir2
 
-	for pin in pins_map:
-		if(direction == 1):
-		    	x = 0	
-		    	y = step * count
-		    	count += 1
-		elif(direction == 2):
-		   	x = step * count
-		    	y = 0
-		    	count +=1 
-		elif(direction == 3):
-		    	x = dim_w
-		    	y = step * count
-		    	count +=1 
-		else:
-		    	x = step * count
-		    	y = dim_h
-		    	count +=1 
+    for pin in pins_map:
+        if(direction == 1):
+            x = 0	
+            y = step * count
+            count += 1
+        elif(direction == 2):
+            x = step * count
+            y = 0
+            count +=1 
+        elif(direction == 3):
+            x = dim_w
+            y = step * count
+            count +=1 
+        else:
+            x = step * count
+            y = dim_h
+            count +=1 
 
-		if(direction == 1 and y > dim_h - step):
-		    	direction = 2
-		    	count =1 
-		elif(direction == 2 and x > dim_w - step):
-		    	direction = 3
-		    	count =1 
-		elif(direction == 3 and y > dim_h - step):
-		    	direction = 4
-		    	count =1
-		pins_map[pin]["x_location"] = x
-		pins_map[pin]["y_location"] = y
-		
+        if(direction == 1 and y > dim_h - step):
+            direction = 2
+            count =1 
+        elif(direction == 2 and x > dim_w - step):
+            direction = 3
+            count =1 
+        elif(direction == 3 and y > dim_h - step):
+            direction = 4
+            count =1
+        pins_map[pin]["x_location"] = x
+        pins_map[pin]["y_location"] = y
+        
 def print_Usage():
-	print("USAGE: ")
-	print("      python pins_placer.py -def file.def -output output.def\n")
+    print("USAGE: ")
+    print("      python pins_placer.py -def file.def -output output.def\n")
 
 def execute():
-	if(len(sys.argv) != 5):
-		print("\nERROR: Missing or Unknown Arguments.")
-		print_Usage()
-		return
-		
-	i = 1
-	while i < 5:
-		if sys.argv[i] == "pins_placer.py":
-				continue
-		elif sys.argv[i] == "-def":
-				def_file = sys.argv[i+1]
-				i +=1
-		elif sys.argv[i] == "-output":
-				output_def = sys.argv[i+1]
-				i +=1
-		else:
-			print("\nERROR: Missing or Unknown Arguments.")
-			print_Usage()
-			return
-		i += 1
+    if(len(sys.argv) != 5):
+        print("\nERROR: Missing or Unknown Arguments.")
+        print_Usage()
+        return
+        
+    i = 1
+    while i < 5:
+        if sys.argv[i] == "pins_placer.py":
+            continue
+        elif sys.argv[i] == "-def":
+            def_file = sys.argv[i+1]
+            i +=1
+        elif sys.argv[i] == "-output":
+            output_def = sys.argv[i+1]
+            i +=1
+        else:
+            print("\nERROR: Missing or Unknown Arguments.")
+            print_Usage()
+            return
+        i += 1
 
-	pins_map = {}
+    pins_map = {}
 
-	# Copy Intro Section
-	intro_section = copy_intro_section(def_file)
-    	components_section = copy_components_section(def_file)
-    	nets_section = copy_nets_section(def_file)
-	exit_section = copy_exit_section(def_file)
+    # Copy Intro Section
+    intro_section = copy_intro_section(def_file)
+    components_section = copy_components_section(def_file)
+    nets_section = copy_nets_section(def_file)
+    exit_section = copy_exit_section(def_file)
 
-	extract_Pins_section(def_file,pins_map)
-	
-	die_area = {}
-	get_die_area(def_file, die_area)
-	place_pins(pins_map, die_area["width"], die_area["height"])
-	
-	# Write DEF
-	paste_intro_section(output_def,intro_section)
-    	paste_components_section(output_def,components_section)
-	save_pins_section(output_def,pins_map)
-	paste_nets_section(output_def,nets_section)
-	paste_exit_section(output_def,exit_section)
+    extract_Pins_section(def_file,pins_map)
+    
+    die_area = {}
+    get_die_area(def_file, die_area)
+    place_pins(pins_map, die_area["width"], die_area["height"])
+    
+    # Write DEF
+    paste_intro_section(output_def,intro_section)
+    paste_components_section(output_def,components_section)
+    save_pins_section(output_def,pins_map)
+    paste_nets_section(output_def,nets_section)
+    paste_exit_section(output_def,exit_section)
 
 # call
 execute()
