@@ -90,26 +90,35 @@ def place_pins(pins_map,dim_w,dim_h):
             count =1
         pins_map[pin]["x_location"] = x
         pins_map[pin]["y_location"] = y
-        
+
+def modify_layer_number(pins_map, layer_number):
+    for pin in pins_map:
+        pins_map[pin]["layer"] = "M" + layer_number
+
 def print_Usage():
     print("USAGE: ")
-    print("      python pins_placer.py -def file.def -output output.def\n")
+    print("      python pins_placer.py -def file.def -output output.def [-layer] layer_number\n")
 
 def execute():
-    if(len(sys.argv) != 5):
+    if(len(sys.argv) != 7):
         print("\nERROR: Missing or Unknown Arguments.")
         print_Usage()
         return
         
     i = 1
-    while i < 5:
-        if sys.argv[i] == "pins_placer.py":
-            continue
-        elif sys.argv[i] == "-def":
+    layer_num = 0
+    while i < len(sys.argv):
+        if sys.argv[i] == "-def":
             def_file = sys.argv[i+1]
             i +=1
         elif sys.argv[i] == "-output":
             output_def = sys.argv[i+1]
+            i +=1
+        elif sys.argv[i] == "-layer":
+            layer_num = sys.argv[i+1]
+            if (str(int(layer_num)) != layer_num) or (int(layer_num) <= 0):
+                print("\nERROR: -layer option should be a positive integer.")
+                return
             i +=1
         else:
             print("\nERROR: Missing or Unknown Arguments.")
@@ -126,6 +135,9 @@ def execute():
     exit_section = copy_exit_section(def_file)
 
     extract_Pins_section(def_file,pins_map)
+    
+    if layer_num != 0:
+        modify_layer_number(pins_map,layer_num)
     
     die_area = {}
     get_die_area(def_file, die_area)

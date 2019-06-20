@@ -200,14 +200,18 @@ std::string FormDefGeneratorCommand(std::string defGenLocation, std::string temp
     for(unsigned int i = 0; i < lef_files_list.size(); i++)
         defGenCmd << " -lef " << lef_files_list.at(i);
     defGenCmd << " -lib " << liberty_file << " -verilog " << tempdir_name << "/netlist.v -defDbu " << defDbu << " -dieAreaInMicron 0 0 ";
-    defGenCmd << die_width << " " << die_height << " -siteName " << siteName << " -design netlist -def " << tempdir_name << "/" << ntkName << ".def\n";
+    defGenCmd << die_width << " " << die_height << " -siteName " << siteName << " -design netlist -def " << tempdir_name << "/" << ntkName << "generated.def\n";
     return defGenCmd.str();
 }
 
-std::string FormPinsPlacerCommand(std::string pinsPlacerLocation, std::string tempdir_name, std::string ntkName)
+std::string FormPinsPlacerCommand(std::string pinsPlacerLocation, std::string tempdir_name, std::string ntkName, int layer_number)
 {
     std::stringstream pinPlacerCmd;
-    pinPlacerCmd << "python " << pinsPlacerLocation << " -def " << tempdir_name << "/" << ntkName + ".def -output " << tempdir_name << "/" << ntkName << ".def\n";
+    pinPlacerCmd << "python " << pinsPlacerLocation << " -def " << tempdir_name << "/" << ntkName + "generated.def -output " << tempdir_name << "/" << ntkName << ".def ";
+    if (layer_number != 0)
+        pinPlacerCmd << " -layer " << layer_number << "\n";
+    else
+        pinPlacerCmd << "\n";
     return pinPlacerCmd.str();
 }
 
@@ -1253,6 +1257,11 @@ struct Phys_abcPass : public Pass {
         log("        it specifies row name in the lef files,\n");
         log("        for more information check [5].\n");
         log("\n");
+        log("    -layer\n");
+        log("        This is an option that can be used in the Physical synthesis flow using RePlAce,\n");
+        log("        it should be a positive integer that specifies the layer number,\n");
+        log("        that the pins placer use to place the pins.\n");
+        log("\n");
         log("[1] http://www.eecs.berkeley.edu/~alanmi/abc/\n");
         log("[2] https://github.com/abk-openroad/RePlAce\n");
         log("[3] https://github.com/abk-openroad/RePlAce/blob/master/doc/BinaryArguments.md\n");
@@ -1285,7 +1294,7 @@ struct Phys_abcPass : public Pass {
         bool phys_mode = true;
         bool enable_tcl_sdc_parser = false;
         markgroups = false;
-        int die_width = 0, die_height = 0, defDbu = 0;
+        int die_width = 0, die_height = 0, defDbu = 0, layer_number = 2;
         float res_per_micron = 0, cap_per_micron = 0;
 
 #ifdef _WIN32
@@ -1425,6 +1434,13 @@ struct Phys_abcPass : public Pass {
                 pinsPlacerLocation = args[++argidx];
                 continue;
             }
+            if (arg == "-layer" && argidx+1 < args.size()) {
+                std::string temp = args[++argidx];
+                if(!std::stoi(temp) || std::stoi(temp) <= 0)
+                    log_error("layer should be a positive integer number.\n");
+                layer_number = std::stoi(temp);                
+                continue;
+            }
             if (arg == "-defDbu" && argidx+1 < args.size()) {
                 std::string temp = args[++argidx];
                 if(!std::stoi(temp) || std::stoi(temp) <= 0)
@@ -1521,7 +1537,7 @@ struct Phys_abcPass : public Pass {
             if(phys_mode && innovus_script_file.empty())
             {
                 defGenCommand = FormDefGeneratorCommand(defGenLocation, tempdir_name,log_id(mod->name),liberty_file,die_height,die_width,defDbu, siteName);
-                pinsPlacerCommand = FormPinsPlacerCommand(pinsPlacerLocation, tempdir_name,log_id(mod->name));
+                pinsPlacerCommand = FormPinsPlacerCommand(pinsPlacerLocation, tempdir_name,log_id(mod->name),layer_number);
                 replaceCommand = FormReplaceCommand(replaceLocation, tempdir_name,log_id(mod->name), res_per_micron, cap_per_micron,liberty_file,constr_file,replace_output_folder,dpFlag,dpLocation);
                 spefCopyCommand = FormSpefCopyCommand(log_id(mod->name),replace_output_folder);
                 replaceCleanCommand = FormReplaceCleanCommand(log_id(mod->name), replace_output_folder);
