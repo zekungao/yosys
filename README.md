@@ -91,9 +91,9 @@ it relies on ABC to perform physical aware gate sizing and buffering,
 `-clk_port` flag must be set by the name of the used library flip-flop clock port,
 also to run the physical flow using RePlAce, the following argyments must be set:
 
-1. For the def genetator: `DefGenerator` needs to be set to the location of the def translator as well as the needed arguments used by the Def Translator as `-defDbu`, `siteName`, `-die_width`, `-die_height`, for more info about these arguments visit [The Def Translator Gihub Repo](https://github.com/abk-openroad/OpenROAD-Utilities/blob/master/verilog-to-def/README.md)
+1. For the def genetator: `-DefGenerator` needs to be set to the location of the def translator as well as the needed arguments used by the Def Translator as `-defDbu`, `siteName`, `-die_width`, `-die_height`, for more info about these arguments visit [The Def Translator Gihub Repo](https://github.com/abk-openroad/OpenROAD-Utilities/blob/master/verilog-to-def/README.md)
 
-2. For the pins placer: `PinsPlacer` needs to be set to the location of the pins placer, You can find the script [here](https://github.com/scale-lab/yosys/blob/master/tools/Def_Analyzer/pins_placer.py).
+2. For the pins placer: `-PinsPlacer` needs to be set to the location of the pins placer, the metal layer on which the pins would be placed can be defined by the option `-layer` which should be an integer value, You can find the script [here](https://github.com/scale-lab/yosys/blob/master/tools/Def_Analyzer/pins_placer.py).
 
 3. For RePlAce: `-RePlAce` needs to be set to the location to replace as well as the needed arguments used by RePlAce as `-liberty`, `-constr`, `-res_per_micron`, `-cap_per_micron`, `-output`, `-dpflag`, `-dploc`, for more info about these arguments visit [RePlAce Gihub Repo](https://github.com/abk-openroad/RePlAce/blob/master/README.md)
 
