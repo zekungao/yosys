@@ -97,10 +97,10 @@ def modify_layer_number(pins_map, layer_number):
 
 def print_Usage():
     print("USAGE: ")
-    print("      python pins_placer.py -def file.def -output output.def [-layer] layer_number\n")
+    print("      python pins_placer.py -def file.def -output output.def [-layer layer_number]\n")
 
 def execute():
-    if(len(sys.argv) != 7):
+    if(len(sys.argv) < 5):
         print("\nERROR: Missing or Unknown Arguments.")
         print_Usage()
         return
