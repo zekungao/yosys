@@ -110,6 +110,7 @@ bool recover_init;
 vector<shared_str> cstr_buf;
 dict<IdString, double> cell_area;
 std::vector<std::string> lef_files_list;
+std::vector<std::string> clk_ports;
 
 
 bool clk_polarity, en_polarity;
@@ -117,9 +118,25 @@ RTLIL::SigSpec clk_sig, en_sig;
 dict<int, std::string> pi_map, po_map;
 dict<std::string, int> name_map;
 int extra_wires_count = 0;
-bool is_DFF (RTLIL::Cell* cell)
+
+bool debug = false;
+
+bool isMemoryBlock (RTLIL::Cell* cell)
 {
-    return (cell->hasPort("\\D") && (cell->hasPort("\\Q") || cell->hasPort("\\QN")));
+    for(size_t i = 0; i < clk_ports.size(); i++)
+    {
+        std::string clk_port = "\\" + clk_ports[i];
+        if(cell->hasPort(clk_port))
+            return true;
+    }
+    return false;
+
+}
+
+bool isClockPort (std::string port)
+{
+    auto it = std::find(clk_ports.begin(), clk_ports.end(), port);
+    return (it != clk_ports.end());
 }
 
 std::string id(RTLIL::IdString internal_id)
@@ -460,7 +477,6 @@ void dump_sigspec(std::ostream &f, const RTLIL::SigSpec &sig)
 
 void dump_cell(std::ostream &f, std::string indent, RTLIL::Cell *cell)
 {
-    //dump_attributes(f, indent, cell->attributes);
     f << stringf("%s" "%s", indent.c_str(), log_id(cell->type));
     f << stringf(" gg%d (", name_map[log_id(cell->name)]);
 
@@ -468,19 +484,21 @@ void dump_cell(std::ostream &f, std::string indent, RTLIL::Cell *cell)
     for (auto &conn : cell->connections()){
         std::string wire_name = "";
         RTLIL::SigSpec newsig = conn.second;
-        log_assert(newsig.size() == 1); // make sure size is one
-        assign_map.apply(newsig);
-        if (!first_arg)
-            f << stringf(",");
-        if (signal_map.count(newsig) > 0)
-            wire_name = stringf("n%d", signal_map[newsig]);
-        else {
-            std::stringstream conn_name;
-            dump_sigspec(conn_name, newsig);
-            wire_name = conn_name.str();
+        for(int i=0; i < newsig.size(); i++)
+        {
+            assign_map.apply(newsig[i]);
+            if (!first_arg)
+                f << stringf(",");
+            if (signal_map.count(newsig[i]) > 0)
+                wire_name = stringf("n%d", signal_map[newsig[i]]);
+            else {
+                std::stringstream conn_name;
+                dump_sigspec(conn_name, newsig[i]);
+                wire_name = conn_name.str();
+            }
+            f << stringf( " .%s(%s)", cstr(conn.first), wire_name.c_str());
+            first_arg = false;
         }
-        f << stringf( " .%s(%s)", cstr(conn.first), wire_name.c_str());
-        first_arg = false;
     }
     f << stringf(");\n");
 }
@@ -509,14 +527,6 @@ void dump_wire(std::stringstream &f, std::string indent, RTLIL::Wire *wire)
         for (unsigned int i=0; i<wire_names.size(); i++) {
             f << stringf("%s" "input %s;\n", indent.c_str(), wire_names[i].c_str());
         }
-  /*      if(wire_names.size() > 1)
-        {
-            f << stringf("%s" "input %s[0:%d];\n", indent.c_str(), id(wire->name).c_str(), wire_names.size()-1);
-        }
-        else
-        {
-            f << stringf("%s" "input %s;\n", indent.c_str(), id(wire->name).c_str());
-        }*/
     }
     if (!wire->port_input && wire->port_output)
     {
@@ -630,12 +640,12 @@ void mark_primary_port(RTLIL::SigSpec sig, bool pi, bool po)
         }
 }
 
-void extract_cell(RTLIL::Cell *cell, std::stringstream &f,int counter, std::string clock_port)
+void extract_cell(RTLIL::Cell *cell, std::stringstream &f,int counter)
 {
-    std::string cell_type = cell->type.str();
     name_map[log_id(cell->name)] = counter;
 
-    if (!is_DFF(cell)){
+    if (!isMemoryBlock(cell))
+    {
         f << stringf("#gg%d\n",counter);
         f << stringf(".gate %s", log_id(cell->type));
         for (auto &conn : cell->connections()){
@@ -648,47 +658,32 @@ void extract_cell(RTLIL::Cell *cell, std::stringstream &f,int counter, std::stri
         f << stringf("\n");
         return;
     }
-    else{
+    else
+    {
+        if(debug) std::cout << "DFF " << log_id(cell->type) << std::endl;
         cell->simpleName = stringf("$gg%d\n",counter);
-        RTLIL::SigSpec sig_d;
-        if (cell->hasPort("\\D"))
-            sig_d = cell->getPort("\\D");
-        else
-            log_cmd_error("DFF does not have a D port\n");
 
-        assign_map.apply(sig_d);
-
-        RTLIL::SigSpec sig_q;
-        if(cell->hasPort("\\Q"))
-            sig_q = cell->getPort("\\Q");
-        RTLIL::SigSpec sig_qn;
-        if(cell->hasPort("\\QN"))
-            sig_qn = cell->getPort("\\QN");
-
-        RTLIL::SigSpec sig_clk;
-        clock_port = "\\" + clock_port;
-        if(cell->hasPort(clock_port))
-            sig_clk = cell->getPort(clock_port);
-
-        log_assert(sig_d.size() == 1); // make sure size is one
-        log_assert(sig_q.size() == 1 || sig_qn.size() == 1); // make sure size is one
 
         for (auto &conn : cell->connections())
         {
             RTLIL::SigSpec newsig = conn.second;
-            log_assert(newsig.size() == 1); // make sure size is one
-            if(newsig == sig_clk)
+            std::string port = std::string(cstr(conn.first));
+            if(isClockPort(port))
             {
                 continue;
             }
-            assign_map.apply(newsig);
-            if(newsig == sig_q || newsig == sig_qn)
+
+            for(int i = 0; i< newsig.size(); i++)
             {
-                add_to_signal_list(newsig, true, false, true, false, false,false);
-            }
-            else
-            {
-                add_to_signal_list(newsig, true, true, false, false, false,false);
+                assign_map.apply(newsig[i]);
+                if(port == "Q" || port == "QN" || port == "QA")
+                {
+                    add_to_signal_list(newsig[i], true, false, true, false, false,false);
+                }
+                else
+                {
+                    add_to_signal_list(newsig[i], true, true, false, false, false,false);
+                }
             }
         }
     }
@@ -828,7 +823,7 @@ struct abc_output_filter
 
 void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::string script_file, std::string innovus_script_file, std::string exe_file,
         std::string liberty_file, std::string constr_file, bool cleanup, std::string clk_str, const std::vector<RTLIL::Cell*> &cells, bool show_tempdir,
-        bool phys_mode, std::string clk_port,std::string defGenCommand, std::string pinsPlacerCommand, std::string replaceCommand, std::string spefCopyCommand,
+        bool phys_mode,std::string defGenCommand, std::string pinsPlacerCommand, std::string replaceCommand, std::string spefCopyCommand,
         std::string replaceCleanCommand, std::string tempdir_name, bool enable_tcl_sdc_parser)
 {
     module = current_module;
@@ -857,10 +852,12 @@ void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::strin
     abc_script += stringf("read_blif %s/input.blif; ", tempdir_name.c_str());
 
     if (!constr_file.empty())
+    {
         if(enable_tcl_sdc_parser)
             abc_script += stringf("read_constr -s %s; ", constr_file.c_str());
         else
             abc_script += stringf("read_constr -v %s; ", constr_file.c_str());
+    }
 
     if (!script_file.empty()) {
         if (script_file[0] == '+') {
@@ -899,7 +896,7 @@ void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::strin
     int counter = 1;
     for (auto c : cells)
     {
-        extract_cell(c, gates_sstr,counter,clk_port);
+        extract_cell(c, gates_sstr,counter);
         counter++;
     }
 
@@ -926,8 +923,7 @@ void abc_module(RTLIL::Design *design, RTLIL::Module *current_module, std::strin
     }
 
     for (auto c : cells){
-        std::string cell_type = c->type.str();
-        if (!is_DFF(c)){
+        if (!isMemoryBlock(c)){
             module->remove(c);
         }
     }
@@ -1407,7 +1403,7 @@ struct Phys_abcPass : public Pass {
                 continue;
             }
             if (arg == "-clk_port" && argidx+1 < args.size()) {
-                clk_port = args[++argidx];
+                clk_ports.push_back(args[++argidx]);
                 continue;
             }
             if (arg == "-dpflag" && argidx+1 < args.size()) {
@@ -1460,7 +1456,7 @@ struct Phys_abcPass : public Pass {
         if (!constr_file.empty() && liberty_file.empty())
             log_error("Got -constr but no -liberty!\n");
 
-        if (clk_port.empty())
+        if (clk_ports.size() == 0)
             log_error("-clk_port should be set.\n");
 
         if(phys_mode && innovus_script_file.empty())
@@ -1544,7 +1540,7 @@ struct Phys_abcPass : public Pass {
             }
 
             abc_module(design, mod, script_file, innovus_script_file, exe_file, liberty_file, constr_file, cleanup, clk_str,
-                       mod->selected_cells(), show_tempdir, phys_mode, clk_port, defGenCommand,pinsPlacerCommand,replaceCommand,spefCopyCommand,replaceCleanCommand,tempdir_name,enable_tcl_sdc_parser);
+                       mod->selected_cells(), show_tempdir, phys_mode, defGenCommand,pinsPlacerCommand,replaceCommand,spefCopyCommand,replaceCleanCommand,tempdir_name,enable_tcl_sdc_parser);
         }
 
         assign_map.clear();
