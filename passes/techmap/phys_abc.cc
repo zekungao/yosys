@@ -240,7 +240,7 @@ std::string FormReplaceCommand(std::string replaceLocation, std::string tempdir_
     for(unsigned int i = 0; i < lef_files_list.size(); i++)
         replaceCmd << " -lef " << lef_files_list.at(i);
     replaceCmd << " -verilog " << tempdir_name << "/netlist.v -lib " << liberty_file << " -sdc " << constr_file;
-    replaceCmd << " -output " << out_loc << " -t 1 -dpflag " << dpflag << " -dploc " << dploc << " -onlyDP -unitY 1200 -capPerMicron " << cap_per_micron << " -resPerMicron " << res_per_micron << " -timing";
+    replaceCmd << " -output " << out_loc << " -t 1 -dpflag " << dpflag << " -dploc " << dploc << " -onlyGP -unitY 864 -capPerMicron " << cap_per_micron << " -resPerMicron " << res_per_micron << " -timing";
     return replaceCmd.str();
 }
 
@@ -254,7 +254,7 @@ std::string FormReplaceCleanCommand(std::string ntkName, std::string out_loc)
 std::string FormSpefCopyCommand(std::string ntkName, std::string out_loc)
 {
     std::stringstream copyCommand;
-    copyCommand << "cp " << out_loc << "/etc/" << ntkName << "/experiment000/*.spef spef_output/netlist.spef";
+    copyCommand << "cp " << out_loc << "/etc/" << ntkName << "/experiment000/*_gp.spef spef_output/netlist.spef";
     return copyCommand.str();
 }
 
