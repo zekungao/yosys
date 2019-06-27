@@ -233,14 +233,14 @@ std::string FormPinsPlacerCommand(std::string pinsPlacerLocation, std::string te
 }
 
 std::string FormReplaceCommand(std::string replaceLocation, std::string tempdir_name, std::string ntkName, float res_per_micron, float cap_per_micron,
-                std::string liberty_file, std::string constr_file, std::string out_loc, std::string dpflag, std::string dploc)
+                std::string liberty_file, std::string constr_file, std::string out_loc)
 {
     std::stringstream replaceCmd;
     replaceCmd << replaceLocation << " -bmflag etc -def " << tempdir_name << "/" << ntkName << ".def";
     for(unsigned int i = 0; i < lef_files_list.size(); i++)
         replaceCmd << " -lef " << lef_files_list.at(i);
     replaceCmd << " -verilog " << tempdir_name << "/netlist.v -lib " << liberty_file << " -sdc " << constr_file;
-    replaceCmd << " -output " << out_loc << " -t 1 -dpflag " << dpflag << " -dploc " << dploc << " -onlyGP -unitY 864 -capPerMicron " << cap_per_micron << " -resPerMicron " << res_per_micron << " -timing";
+    replaceCmd << " -output " << out_loc << " -t 1 -onlyGP -unitY 864 -capPerMicron " << cap_per_micron << " -resPerMicron " << res_per_micron << " -timing";
     return replaceCmd.str();
 }
 
@@ -1178,6 +1178,7 @@ struct Phys_abcPass : public Pass {
         log("\n");
         log("    -clk_port\n");
         log("        set the name of the clock port for the flip flops in the used liberty file.\n");
+        log("        If there is multiple Memory Blocks, all should be set using this option.\n");
         log("\n");
         log("    -no_phys\n");
         log("        Do not use the physical flow. Yosys will not pass -x flags to ABC.\n");
@@ -1202,16 +1203,6 @@ struct Phys_abcPass : public Pass {
         log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
         log("        it should be set to the PinsPlacer file location,\n");
         log("        it can be downloaded from [6].\n");
-        log("\n");
-        log("    -dpflag\n");
-        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
-        log("        it specifies which Detailed Placer will be used by RePlAce,\n");
-        log("        for more information check [3].\n");
-        log("\n");
-        log("    -dploc\n");
-        log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
-        log("        it specifies the location of the Detailed Placer that is needed by RePlAce,\n");
-        log("        for more information check [3].\n");
         log("\n");
         log("    -output\n");
         log("        This is a mandatory option in the Physical synthesis flow using RePlAce,\n");
@@ -1406,14 +1397,6 @@ struct Phys_abcPass : public Pass {
                 clk_ports.push_back(args[++argidx]);
                 continue;
             }
-            if (arg == "-dpflag" && argidx+1 < args.size()) {
-                dpFlag = args[++argidx];
-                continue;
-            }
-            if (arg == "-dploc" && argidx+1 < args.size()) {
-                dpLocation = args[++argidx];
-                continue;
-            }
             if (arg == "-output" && argidx+1 < args.size()) {
                 replace_output_folder = args[++argidx];
                 continue;
@@ -1476,12 +1459,6 @@ struct Phys_abcPass : public Pass {
             if(pinsPlacerLocation.empty())
                 log_error("-PinsPlacer option should be set to run the Physical Synthesis flow using RePlAce.\n");
 
-            if(dpFlag.empty())
-                log_error("-dpflag option should be set to run the Physical Synthesis flow using RePlAce.\n");
-
-            if(dpLocation.empty())
-                log_error("-dploc option should be set to run the Physical Synthesis flow using RePlAce.\n");
-
             if(replace_output_folder.empty())
                 log_error("-output option should be set to run the Physical Synthesis flow using RePlAce.\n");
 
@@ -1534,7 +1511,7 @@ struct Phys_abcPass : public Pass {
             {
                 defGenCommand = FormDefGeneratorCommand(defGenLocation, tempdir_name,log_id(mod->name),liberty_file,die_height,die_width,defDbu, siteName);
                 pinsPlacerCommand = FormPinsPlacerCommand(pinsPlacerLocation, tempdir_name,log_id(mod->name),layer_number);
-                replaceCommand = FormReplaceCommand(replaceLocation, tempdir_name,log_id(mod->name), res_per_micron, cap_per_micron,liberty_file,constr_file,replace_output_folder,dpFlag,dpLocation);
+                replaceCommand = FormReplaceCommand(replaceLocation, tempdir_name,log_id(mod->name), res_per_micron, cap_per_micron,liberty_file,constr_file,replace_output_folder);
                 spefCopyCommand = FormSpefCopyCommand(log_id(mod->name),replace_output_folder);
                 replaceCleanCommand = FormReplaceCleanCommand(log_id(mod->name), replace_output_folder);
             }
