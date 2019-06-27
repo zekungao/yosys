@@ -44,8 +44,8 @@ units_per_micron = 2000
 
 def place_pins(pins_map,dim_w,dim_h):
     io_count = len(pins_map)
-    step = int(2*(dim_w + dim_h)/io_count)
-    step = int(0.9*step)
+    max_pins_per_side = io_count/4
+    step = 200
     count = 1
     direction = 1 
     x = 0
@@ -79,13 +79,13 @@ def place_pins(pins_map,dim_w,dim_h):
             y = dim_h
             count +=1 
 
-        if(direction == 1 and y > dim_h - step):
+        if(direction == 1 and (y > dim_h - step or count > max_pins_per_side)):
             direction = 2
             count =1 
-        elif(direction == 2 and x > dim_w - step):
+        elif(direction == 2 and (x > dim_w - step or count > max_pins_per_side)):
             direction = 3
             count =1 
-        elif(direction == 3 and y > dim_h - step):
+        elif(direction == 3 and (y > dim_h - step or count > max_pins_per_side)):
             direction = 4
             count =1
         pins_map[pin]["x_location"] = x

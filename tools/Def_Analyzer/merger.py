@@ -47,7 +47,7 @@ def merge_defs(placed_components_map,placed_pins_map,unplaced_components_map,unp
 
         else:
             merged_components_map[component] = unplaced_components_map[component]
-            '''
+            
             gate_conn = []
             get_connected_components(component,gate_conn,unplaced_nets_map)
             x_coor_list = []
@@ -74,5 +74,5 @@ def merge_defs(placed_components_map,placed_pins_map,unplaced_components_map,unp
 
             merged_components_map[component]["x_location"] = int((max(x_coor_list)+min(x_coor_list))/2)
             merged_components_map[component]["y_location"] = int((max(y_coor_list)+min(y_coor_list))/2)
-            '''
+            
     
