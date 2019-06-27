@@ -167,6 +167,30 @@ set_max_transition  #Support for global target slew
 
 We are working on adding support for other timing constraints in ABC.
 
+### Helper Scripts
+
+#### Incremental DEF Writer Script
+It takes Two Def files and Merge them while retaining the placement data found in the placed one.
+- **Inputs:**
+  1. DEF file with all the components Placed
+  2. The new DEF file with the modified/added components which are all unplaced
+  
+- **Output:**
+DEF file with all components including Modified/Added ones from the second def files, with all components placed in the locations from the first placed DEF if found, else the component is placed in the centroid of its fanins and fanouts
+
+- **Usage:** 
+`python incremental_def_writer.py -placed placed.def -unplaced unplaced.def -output output.def`
+
+- The Script could be found [here](https://github.com/The-OpenROAD-Project/yosys/blob/master/tools/Def_Analyzer/incremental_def_writer.py).
+
+#### Pins Placer Script
+It takes a def file with the pins unplaced and place them around the die perimeter, It can also change the layer on which pins are placed through the option `-layer` which should be an integer value with the layer number.
+
+- **Usage:**
+`python pins_placer.py -def file.def -output output.def [-layer layer_number]`
+
+- The Script could be found [here](https://github.com/The-OpenROAD-Project/yosys/blob/master/tools/Def_Analyzer/pins_placer.py).
+
 ### Remark
 This Repo is currently maintained by Marina Neseem <marina_neseem@brown.edu>.
 Consider also Soheil Hashemi <soheil_hashemi@alumni.brown.edu> who has started this effort.
