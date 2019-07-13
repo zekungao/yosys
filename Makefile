@@ -811,6 +811,9 @@ config-clang: clean
 config-gcc: clean
 	echo 'CONFIG := gcc' > Makefile.conf
 
+config-gcc-static-only: clean
+	echo 'CONFIG := gcc-static' > Makefile.conf
+
 config-gcc-static: clean
 	echo 'CONFIG := gcc-static' > Makefile.conf
 	echo 'ENABLE_PLUGINS := 0' >> Makefile.conf
