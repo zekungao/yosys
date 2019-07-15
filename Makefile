@@ -173,10 +173,16 @@ LD = gcc
 CXXFLAGS += -std=c++11 -Os
 ABCMKARGS += ARCHFLAGS="-DABC_USE_STDINT_H"
 
+else ifeq ($(CONFIG),gcc-static-tcl-dynamic)
+CXX = gcc
+LD = gcc
+CXXFLAGS += -std=c++11 -Os
+ABCMKARGS += ARCHFLAGS="-DABC_USE_STDINT_H"
+
 else ifeq ($(CONFIG),gcc-static)
 LD = $(CXX)
 LDFLAGS := $(filter-out -rdynamic,$(LDFLAGS)) -static
-LDLIBS := $(filter-out -lrt,$(LDLIBS)) -ltcl86
+LDLIBS := $(filter-out -lrt,$(LDLIBS))
 CXXFLAGS := $(filter-out -fPIC,$(CXXFLAGS))
 CXXFLAGS += -std=c++11 -Os
 ABCMKARGS = CC="$(CC)" CXX="$(CXX)" LD="$(LD)" ABC_USE_LIBSTDCXX=1 LIBS="-lm -lrt -lpthread -static" OPTFLAGS="-O" \
@@ -811,8 +817,9 @@ config-clang: clean
 config-gcc: clean
 	echo 'CONFIG := gcc' > Makefile.conf
 
-config-gcc-static-only: clean
-	echo 'CONFIG := gcc-static' > Makefile.conf
+config-gcc-static-tcl-dynamic: clean
+	echo 'CONFIG := gcc-static-tcl-dynamic' > Makefile.conf
+	echo 'ENABLE_READLINE := 0' >> Makefile.conf
 
 config-gcc-static: clean
 	echo 'CONFIG := gcc-static' > Makefile.conf
