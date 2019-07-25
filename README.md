@@ -192,6 +192,15 @@ It takes a def file with the pins unplaced and place them around the die perimet
 
 - The Script could be found [here](https://github.com/The-OpenROAD-Project/yosys/blob/master/tools/Def_Analyzer/pins_placer.py).
 
+## Demo Script
+There is a [demo](https://github.com/The-OpenROAD-Project/yosys/blob/master/demo/run_yosys_physical_synthesis.tcl) script for the added options. This Demo runs Logic Synthesis then Physical Synthesis for the GCD benchmark using ASAP7 library files, more details can be found inside the script itself.
+
+The Benchmark and the Library files can be found in the folder **demo**.
+
+To run it this demo script:
+1. Clone and build the repository.
+2. Run the script using `./yosys demo/run_yosys_physical_synthesis.tcl`.
+
 ### Remark
 This Repo is currently maintained by Marina Neseem <marina_neseem@brown.edu>.
 Consider also Soheil Hashemi <soheil_hashemi@alumni.brown.edu> who has started this effort.
