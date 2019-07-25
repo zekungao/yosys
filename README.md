@@ -201,6 +201,8 @@ To run it this demo script:
 1. Clone and build the repository.
 2. Run the script using `./yosys demo/run_yosys_physical_synthesis.tcl`.
 
+The output netlist could be found at `demo/output`
+
 ### Remark
 This Repo is currently maintained by Marina Neseem <marina_neseem@brown.edu>.
 Consider also Soheil Hashemi <soheil_hashemi@alumni.brown.edu> who has started this effort.
