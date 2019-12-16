@@ -36,6 +36,7 @@ COPY --from=builder /yosys/build/bin/yosys-abc /build/yosys-abc
 COPY --from=builder /yosys/build/bin/yosys-config /build/yosys-config
 COPY --from=builder /yosys/build/bin/yosys-filterlib /build/yosys-filterlib
 COPY --from=builder /yosys/build/bin/yosys-smtbmc /build/yosys-smtbmc
+COPY --from=builder /yosys/build/share/yosys /build/share
 
 RUN useradd -ms /bin/bash openroad
 USER openroad
