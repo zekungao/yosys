@@ -1,4 +1,4 @@
-FROM centos:centos6 AS builder
+FROM centos:centos7 AS builder
 
 # install gcc 7
 RUN yum -y install centos-release-scl && \
@@ -29,7 +29,7 @@ RUN make PREFIX=build config-gcc-static-tcl-dynamic
 RUN make PREFIX=build -j$(nproc)
 RUN make PREFIX=build install
 
-FROM centos:centos6 AS runner
+FROM centos:centos7 AS runner
 RUN yum update -y && yum install -y readline-devel tcl-devel libffi-devel
 COPY --from=builder /yosys/build/bin/yosys /build/yosys
 COPY --from=builder /yosys/build/bin/yosys-abc /build/yosys-abc
