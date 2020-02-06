@@ -25,19 +25,6 @@ RUN yum install -y flex tcl tcl-devel libffi-devel git graphviz readline-devel g
 
 COPY . /yosys
 WORKDIR /yosys
-RUN make PREFIX=build config-gcc-static-tcl-dynamic
-RUN make PREFIX=build -j$(nproc)
-RUN make PREFIX=build install
-
-FROM centos:centos7 AS runner
-RUN yum update -y && yum install -y readline-devel tcl-devel libffi-devel
-COPY --from=builder /yosys/build/bin/yosys /build/yosys
-COPY --from=builder /yosys/build/bin/yosys-abc /build/yosys-abc
-COPY --from=builder /yosys/build/bin/yosys-config /build/yosys-config
-COPY --from=builder /yosys/build/bin/yosys-filterlib /build/yosys-filterlib
-COPY --from=builder /yosys/build/bin/yosys-smtbmc /build/yosys-smtbmc
-COPY --from=builder /yosys/build/share/yosys /build/share
-
-RUN useradd -ms /bin/bash openroad
-USER openroad
-WORKDIR /home/openroad
+RUN make PREFIX=/build config-gcc-static-tcl-dynamic
+RUN make PREFIX=/build -j$(nproc)
+RUN make PREFIX=/build install
