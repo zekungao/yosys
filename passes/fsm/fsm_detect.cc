@@ -34,13 +34,20 @@ static SigSet<sig2driver_entry_t> sig2driver, sig2user;
 static std::set<RTLIL::Cell*> muxtree_cells;
 static SigPool sig_at_port;
 
-static bool check_state_mux_tree(RTLIL::SigSpec old_sig, RTLIL::SigSpec sig, pool<Cell*> &recursion_monitor)
+static bool check_state_mux_tree(RTLIL::SigSpec old_sig, RTLIL::SigSpec sig, pool<Cell*> &recursion_monitor, dict<RTLIL::SigSpec, bool> &mux_tree_cache)
 {
+	if (mux_tree_cache.find(sig) != mux_tree_cache.end())
+		return mux_tree_cache.at(sig);
+
 	if (sig.is_fully_const() || old_sig == sig) {
+ret_true:
+		mux_tree_cache[sig] = true;
 		return true;
 	}
 
 	if (sig_at_port.check_any(assign_map(sig))) {
+ret_false:
+		mux_tree_cache[sig] = false;
 		return false;
 	}
 
@@ -49,13 +56,13 @@ static bool check_state_mux_tree(RTLIL::SigSpec old_sig, RTLIL::SigSpec sig, poo
 	for (auto &cellport : cellport_list)
 	{
 		if ((cellport.first->type != "$mux" && cellport.first->type != "$pmux") || cellport.second != "\\Y") {
-			return false;
+			goto ret_false;
 		}
 
 		if (recursion_monitor.count(cellport.first)) {
 			log_warning("logic loop in mux tree at signal %s in module %s.\n",
 					log_signal(sig), RTLIL::id2cstr(module->name));
-			return false;
+			goto ret_false;
 		}
 
 		recursion_monitor.insert(cellport.first);
@@ -63,22 +70,22 @@ static bool check_state_mux_tree(RTLIL::SigSpec old_sig, RTLIL::SigSpec sig, poo
 		RTLIL::SigSpec sig_a = assign_map(cellport.first->getPort("\\A"));
 		RTLIL::SigSpec sig_b = assign_map(cellport.first->getPort("\\B"));
 
-		if (!check_state_mux_tree(old_sig, sig_a, recursion_monitor)) {
+		if (!check_state_mux_tree(old_sig, sig_a, recursion_monitor, mux_tree_cache)) {
 			recursion_monitor.erase(cellport.first);
-			return false;
+			goto ret_false;
 		}
 
 		for (int i = 0; i < sig_b.size(); i += sig_a.size())
-			if (!check_state_mux_tree(old_sig, sig_b.extract(i, sig_a.size()), recursion_monitor)) {
+			if (!check_state_mux_tree(old_sig, sig_b.extract(i, sig_a.size()), recursion_monitor, mux_tree_cache)) {
 				recursion_monitor.erase(cellport.first);
-				return false;
+				goto ret_false;
 			}
 
 		recursion_monitor.erase(cellport.first);
 		muxtree_cells.insert(cellport.first);
 	}
 
-	return true;
+	goto ret_true;
 }
 
 static bool check_state_users(RTLIL::SigSpec sig)
@@ -143,11 +150,12 @@ static void detect_fsm(RTLIL::Wire *wire)
 		pool<Cell*> recursion_monitor;
 		RTLIL::SigSpec sig_q = assign_map(cellport.first->getPort("\\Q"));
 		RTLIL::SigSpec sig_d = assign_map(cellport.first->getPort("\\D"));
+		dict<RTLIL::SigSpec, bool> mux_tree_cache;
 
 		if (sig_q != assign_map(wire))
 			continue;
 
-		looks_like_state_reg = check_state_mux_tree(sig_q, sig_d, recursion_monitor);
+		looks_like_state_reg = check_state_mux_tree(sig_q, sig_d, recursion_monitor, mux_tree_cache);
 		looks_like_good_state_reg = check_state_users(sig_q);
 
 		if (!looks_like_state_reg)
@@ -158,22 +166,25 @@ static void detect_fsm(RTLIL::Wire *wire)
 		std::set<sig2driver_entry_t> cellport_list;
 		sig2user.find(sig_q, cellport_list);
 
+		auto sig_q_bits = sig_q.to_sigbit_pool();
+
 		for (auto &cellport : cellport_list)
 		{
 			RTLIL::Cell *cell = cellport.first;
 			bool set_output = false, clr_output = false;
 
-			if (cell->type == "$ne")
+			if (cell->type.in("$ne", "$reduce_or", "$reduce_bool"))
 				set_output = true;
 
-			if (cell->type == "$eq")
+			if (cell->type.in("$eq", "$logic_not", "$reduce_and"))
 				clr_output = true;
 
-			if (!set_output && !clr_output) {
-				clr_output = true;
+			if (set_output || clr_output) {
 				for (auto &port_it : cell->connections())
-					if (port_it.first != "\\A" || port_it.first != "\\Y")
-						clr_output = false;
+					if (cell->input(port_it.first))
+						for (auto bit : assign_map(port_it.second))
+							if (bit.wire != nullptr && !sig_q_bits.count(bit))
+								goto next_cellport;
 			}
 
 			if (set_output || clr_output) {
@@ -184,6 +195,7 @@ static void detect_fsm(RTLIL::Wire *wire)
 						ce.set(sig, val);
 					}
 			}
+		next_cellport:;
 		}
 
 		SigSpec sig_y = sig_d, sig_undef;

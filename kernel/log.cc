@@ -42,8 +42,11 @@ std::vector<FILE*> log_files;
 std::vector<std::ostream*> log_streams;
 std::map<std::string, std::set<std::string>> log_hdump;
 std::vector<std::regex> log_warn_regexes, log_nowarn_regexes, log_werror_regexes;
-std::set<std::string> log_warnings;
+std::vector<std::pair<std::regex,LogExpectedItem>> log_expect_log, log_expect_warning, log_expect_error;
+std::set<std::string> log_warnings, log_experimentals, log_experimentals_ignored;
 int log_warnings_count = 0;
+int log_warnings_count_noexpect = 0;
+bool log_expect_no_warnings = false;
 bool log_hdump_all = false;
 FILE *log_errfile = NULL;
 SHA1 *log_hasher = NULL;
@@ -61,13 +64,22 @@ int log_force_debug = 0;
 int log_debug_suppressed = 0;
 
 vector<int> header_count;
-pool<RTLIL::IdString> log_id_cache;
+vector<char*> log_id_cache;
 vector<shared_str> string_buf;
 int string_buf_index = -1;
 
 static struct timeval initial_tv = { 0, 0 };
 static bool next_print_log = false;
 static int log_newline_count = 0;
+static bool check_expected_logs = true;
+static bool display_error_log_msg = true;
+
+static void log_id_cache_clear()
+{
+	for (auto p : log_id_cache)
+		free(p);
+	log_id_cache.clear();
+}
 
 #if defined(_WIN32) && !defined(__MINGW32__)
 // this will get time information and return it in timeval, simulating gettimeofday()
@@ -155,7 +167,7 @@ void logv(const char *format, va_list ap)
 	{
 		log_warn_regex_recusion_guard = true;
 
-		if (log_warn_regexes.empty())
+		if (log_warn_regexes.empty() && log_expect_log.empty())
 		{
 			linebuffer.clear();
 		}
@@ -167,6 +179,11 @@ void logv(const char *format, va_list ap)
 				for (auto &re : log_warn_regexes)
 					if (std::regex_search(linebuffer, re))
 						log_warning("Found log message matching -W regex:\n%s", str.c_str());
+
+				for (auto &item : log_expect_log)
+					if (std::regex_search(linebuffer, item.first))
+						item.second.current_count++;
+
 				linebuffer.clear();
 			}
 		}
@@ -237,6 +254,13 @@ static void logv_warning_with_prefix(const char *prefix,
 			if (std::regex_search(message, re))
 				log_error("%s",  message.c_str());
 
+		bool warning_match = false;
+		for (auto &item : log_expect_warning)
+			if (std::regex_search(message, item.first)) {
+				item.second.current_count++;
+				warning_match = true;
+			}
+
 		if (log_warnings.count(message))
 		{
 			log("%s%s", prefix, message.c_str());
@@ -256,6 +280,8 @@ static void logv_warning_with_prefix(const char *prefix,
 			log_warnings.insert(message);
 		}
 
+		if (!warning_match)
+			log_warnings_count_noexpect++;
 		log_warnings_count++;
 		log_make_debug = bak_log_make_debug;
 	}
@@ -277,8 +303,19 @@ void log_file_warning(const std::string &filename, int lineno,
 	va_list ap;
 	va_start(ap, format);
 	std::string prefix = stringf("%s:%d: Warning: ",
-				     filename.c_str(), lineno);
+			filename.c_str(), lineno);
 	logv_warning_with_prefix(prefix.c_str(), format, ap);
+	va_end(ap);
+}
+
+void log_file_info(const std::string &filename, int lineno,
+                      const char *format, ...)
+{
+	va_list ap;
+	va_start(ap, format);
+	std::string fmt = stringf("%s:%d: Info: %s",
+			filename.c_str(), lineno, format);
+	logv(fmt.c_str(), ap);
 	va_end(ap);
 }
 
@@ -302,7 +339,8 @@ static void logv_error_with_prefix(const char *prefix,
 				f = stderr;
 
 	log_last_error = vstringf(format, ap);
-	log("%s%s", prefix, log_last_error.c_str());
+	if (display_error_log_msg)
+		log("%s%s", prefix, log_last_error.c_str());
 	log_flush();
 
 	log_make_debug = bak_log_make_debug;
@@ -310,6 +348,12 @@ static void logv_error_with_prefix(const char *prefix,
 	if (log_error_atexit)
 		log_error_atexit();
 
+	for (auto &item : log_expect_error)
+		if (std::regex_search(log_last_error, item.first))
+			item.second.current_count++;
+
+	if (check_expected_logs)
+		log_check_expected();
 #ifdef EMSCRIPTEN
 	log_files = backup_log_files;
 	throw 0;
@@ -359,6 +403,19 @@ void log_warning(const char *format, ...)
 	va_end(ap);
 }
 
+void log_experimental(const char *format, ...)
+{
+	va_list ap;
+	va_start(ap, format);
+	string s = vstringf(format, ap);
+	va_end(ap);
+
+	if (log_experimentals_ignored.count(s) == 0 && log_experimentals.count(s) == 0) {
+		log_warning("Feature '%s' is experimental.\n", s.c_str());
+		log_experimentals.insert(s);
+	}
+}
+
 void log_warning_noprefix(const char *format, ...)
 {
 	va_list ap;
@@ -403,7 +460,7 @@ void log_push()
 void log_pop()
 {
 	header_count.pop_back();
-	log_id_cache.clear();
+	log_id_cache_clear();
 	string_buf.clear();
 	string_buf_index = -1;
 	log_flush();
@@ -510,7 +567,7 @@ void log_reset_stack()
 {
 	while (header_count.size() > 1)
 		header_count.pop_back();
-	log_id_cache.clear();
+	log_id_cache_clear();
 	string_buf.clear();
 	string_buf_index = -1;
 	log_flush();
@@ -530,6 +587,10 @@ void log_dump_val_worker(RTLIL::IdString v) {
 }
 
 void log_dump_val_worker(RTLIL::SigSpec v) {
+	log("%s", log_signal(v));
+}
+
+void log_dump_val_worker(RTLIL::State v) {
 	log("%s", log_signal(v));
 }
 
@@ -569,8 +630,8 @@ const char *log_const(const RTLIL::Const &value, bool autoint)
 
 const char *log_id(RTLIL::IdString str)
 {
-	log_id_cache.insert(str);
-	const char *p = str.c_str();
+	log_id_cache.push_back(strdup(str.c_str()));
+	const char *p = log_id_cache.back();
 	if (p[0] != '\\')
 		return p;
 	if (p[1] == '$' || p[1] == '\\' || p[1] == 0)
@@ -599,6 +660,53 @@ void log_wire(RTLIL::Wire *wire, std::string indent)
 	std::stringstream buf;
 	ILANG_BACKEND::dump_wire(buf, indent, wire);
 	log("%s", buf.str().c_str());
+}
+
+void log_check_expected()
+{
+	check_expected_logs = false;
+
+	for (auto &item : log_expect_warning) {
+		if (item.second.current_count == 0) {
+			log_warn_regexes.clear();
+			log_error("Expected warning pattern '%s' not found !\n", item.second.pattern.c_str());
+		}
+		if (item.second.current_count != item.second.expected_count) {
+			log_warn_regexes.clear();
+			log_error("Expected warning pattern '%s' found %d time(s), instead of %d time(s) !\n", 
+				item.second.pattern.c_str(), item.second.current_count, item.second.expected_count);
+		}
+	}
+
+	for (auto &item : log_expect_log) {
+		if (item.second.current_count == 0) {
+			log_warn_regexes.clear();
+			log_error("Expected log pattern '%s' not found !\n", item.second.pattern.c_str());
+		}
+		if (item.second.current_count != item.second.expected_count) {
+			log_warn_regexes.clear();
+			log_error("Expected log pattern '%s' found %d time(s), instead of %d time(s) !\n",
+				item.second.pattern.c_str(), item.second.current_count, item.second.expected_count);
+		}
+	}
+
+	for (auto &item : log_expect_error)
+		if (item.second.current_count == item.second.expected_count) {
+			log_warn_regexes.clear();
+			log("Expected error pattern '%s' found !!!\n", item.second.pattern.c_str());
+			#ifdef EMSCRIPTEN
+				log_files = backup_log_files;
+				throw 0;
+			#elif defined(_MSC_VER)
+				_exit(0);
+			#else
+				_Exit(0);
+			#endif			
+		} else {
+			display_error_log_msg = false;
+			log_warn_regexes.clear();
+			log_error("Expected error pattern '%s' not found !\n", item.second.pattern.c_str());
+		}
 }
 
 // ---------------------------------------------------

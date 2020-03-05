@@ -33,6 +33,7 @@ struct JsonWriter
 	std::ostream &f;
 	bool use_selection;
 	bool aig_mode;
+	bool compat_int_mode;
 
 	Design *design;
 	Module *module;
@@ -42,8 +43,9 @@ struct JsonWriter
 	dict<SigBit, string> sigids;
 	pool<Aig> aig_models;
 
-	JsonWriter(std::ostream &f, bool use_selection, bool aig_mode) :
-			f(f), use_selection(use_selection), aig_mode(aig_mode) { }
+	JsonWriter(std::ostream &f, bool use_selection, bool aig_mode, bool compat_int_mode) :
+			f(f), use_selection(use_selection), aig_mode(aig_mode),
+			compat_int_mode(compat_int_mode) { }
 
 	string get_string(string str)
 	{
@@ -83,20 +85,42 @@ struct JsonWriter
 		return str + " ]";
 	}
 
+	void write_parameter_value(const Const &value)
+	{
+		if ((value.flags & RTLIL::ConstFlags::CONST_FLAG_STRING) != 0) {
+			string str = value.decode_string();
+			int state = 0;
+			for (char c : str) {
+				if (state == 0) {
+					if (c == '0' || c == '1' || c == 'x' || c == 'z')
+						state = 0;
+					else if (c == ' ')
+						state = 1;
+					else
+						state = 2;
+				} else if (state == 1 && c != ' ')
+					state = 2;
+			}
+			if (state < 2)
+				str += " ";
+			f << get_string(str);
+		} else if (compat_int_mode && GetSize(value) <= 32 && value.is_fully_def()) {
+			if ((value.flags & RTLIL::ConstFlags::CONST_FLAG_SIGNED) != 0)
+				f << stringf("%d", value.as_int());
+			else
+				f << stringf("%u", value.as_int());
+		} else {
+			f << get_string(value.as_string());
+		}
+	}
+
 	void write_parameters(const dict<IdString, Const> &parameters, bool for_module=false)
 	{
 		bool first = true;
 		for (auto &param : parameters) {
 			f << stringf("%s\n", first ? "" : ",");
 			f << stringf("        %s%s: ", for_module ? "" : "    ", get_name(param.first).c_str());
-			if ((param.second.flags & RTLIL::ConstFlags::CONST_FLAG_STRING) != 0)
-				f << get_string(param.second.decode_string());
-			else if (GetSize(param.second.bits) > 32)
-				f << get_string(param.second.as_string());
-			else if ((param.second.flags & RTLIL::ConstFlags::CONST_FLAG_SIGNED) != 0)
-				f << stringf("%d", param.second.as_int());
-			else
-				f << stringf("%u", param.second.as_int());
+			write_parameter_value(param.second);
 			first = false;
 		}
 	}
@@ -126,6 +150,10 @@ struct JsonWriter
 			f << stringf("%s\n", first ? "" : ",");
 			f << stringf("        %s: {\n", get_name(n).c_str());
 			f << stringf("          \"direction\": \"%s\",\n", w->port_input ? w->port_output ? "inout" : "input" : "output");
+			if (w->start_offset)
+				f << stringf("          \"offset\": %d,\n", w->start_offset);
+			if (w->upto)
+				f << stringf("          \"upto\": 1,\n");
 			f << stringf("          \"bits\": %s\n", get_bits(w).c_str());
 			f << stringf("        }");
 			first = false;
@@ -189,6 +217,10 @@ struct JsonWriter
 			f << stringf("        %s: {\n", get_name(w->name).c_str());
 			f << stringf("          \"hide_name\": %s,\n", w->name[0] == '$' ? "1" : "0");
 			f << stringf("          \"bits\": %s,\n", get_bits(w).c_str());
+			if (w->start_offset)
+				f << stringf("          \"offset\": %d,\n", w->start_offset);
+			if (w->upto)
+				f << stringf("          \"upto\": 1,\n");
 			f << stringf("          \"attributes\": {");
 			write_parameters(w->attributes);
 			f << stringf("\n          }\n");
@@ -263,6 +295,10 @@ struct JsonBackend : public Backend {
 		log("    -aig\n");
 		log("        include AIG models for the different gate types\n");
 		log("\n");
+		log("    -compat-int\n");
+		log("        emit 32-bit or smaller fully-defined parameter values directly\n");
+		log("        as JSON numbers (for compatibility with old parsers)\n");
+		log("\n");
 		log("\n");
 		log("The general syntax of the JSON output created by this command is as follows:\n");
 		log("\n");
@@ -334,12 +370,12 @@ struct JsonBackend : public Backend {
 		log("Module and cell ports and nets can be single bit wide or vectors of multiple\n");
 		log("bits. Each individual signal bit is assigned a unique integer. The <bit_vector>\n");
 		log("values referenced above are vectors of this integers. Signal bits that are\n");
-		log("connected to a constant driver are denoted as string \"0\" or \"1\" instead of\n");
-		log("a number.\n");
+		log("connected to a constant driver are denoted as string \"0\", \"1\", \"x\", or\n");
+		log("\"z\" instead of a number.\n");
 		log("\n");
-		log("Numeric parameter and attribute values up to 32 bits are written as decimal\n");
-		log("values. Numbers larger than that are written as string holding the binary\n");
-		log("representation of the value.\n");
+		log("Bit vectors (including integers) are written as string holding the binary");
+		log("representation of the value. Strings are written as strings, with an appended");
+		log("blank in cases of strings of the form /[01xz]* */.\n");
 		log("\n");
 		log("For example the following Verilog code:\n");
 		log("\n");
@@ -463,6 +499,7 @@ struct JsonBackend : public Backend {
 	void execute(std::ostream *&f, std::string filename, std::vector<std::string> args, RTLIL::Design *design) YS_OVERRIDE
 	{
 		bool aig_mode = false;
+		bool compat_int_mode = false;
 
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++)
@@ -471,13 +508,17 @@ struct JsonBackend : public Backend {
 				aig_mode = true;
 				continue;
 			}
+			if (args[argidx] == "-compat-int") {
+				compat_int_mode = true;
+				continue;
+			}
 			break;
 		}
 		extra_args(f, filename, args, argidx);
 
 		log_header(design, "Executing JSON backend.\n");
 
-		JsonWriter json_writer(*f, false, aig_mode);
+		JsonWriter json_writer(*f, false, aig_mode, compat_int_mode);
 		json_writer.write_design(design);
 	}
 } JsonBackend;
@@ -498,6 +539,10 @@ struct JsonPass : public Pass {
 		log("    -aig\n");
 		log("        also include AIG models for the different gate types\n");
 		log("\n");
+		log("    -compat-int\n");
+		log("        emit 32-bit or smaller fully-defined parameter values directly\n");
+		log("        as JSON numbers (for compatibility with old parsers)\n");
+		log("\n");
 		log("See 'help write_json' for a description of the JSON format used.\n");
 		log("\n");
 	}
@@ -505,6 +550,7 @@ struct JsonPass : public Pass {
 	{
 		std::string filename;
 		bool aig_mode = false;
+		bool compat_int_mode = false;
 
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++)
@@ -517,6 +563,10 @@ struct JsonPass : public Pass {
 				aig_mode = true;
 				continue;
 			}
+			if (args[argidx] == "-compat-int") {
+				compat_int_mode = true;
+				continue;
+			}
 			break;
 		}
 		extra_args(args, argidx, design);
@@ -525,6 +575,7 @@ struct JsonPass : public Pass {
 		std::stringstream buf;
 
 		if (!filename.empty()) {
+			rewrite_filename(filename);
 			std::ofstream *ff = new std::ofstream;
 			ff->open(filename.c_str(), std::ofstream::trunc);
 			if (ff->fail()) {
@@ -536,7 +587,7 @@ struct JsonPass : public Pass {
 			f = &buf;
 		}
 
-		JsonWriter json_writer(*f, true, aig_mode);
+		JsonWriter json_writer(*f, true, aig_mode, compat_int_mode);
 		json_writer.write_design(design);
 
 		if (!filename.empty()) {

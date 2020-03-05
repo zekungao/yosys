@@ -9,12 +9,12 @@ GENFILES += techlibs/common/simcells_help.inc
 
 techlibs/common/simlib_help.inc: techlibs/common/cellhelp.py techlibs/common/simlib.v
 	$(Q) mkdir -p techlibs/common
-	$(P) python3 $^ > $@.new
+	$(P) $(PYTHON_EXECUTABLE) $^ > $@.new
 	$(Q) mv $@.new $@
 
 techlibs/common/simcells_help.inc: techlibs/common/cellhelp.py techlibs/common/simcells.v
 	$(Q) mkdir -p techlibs/common
-	$(P) python3 $^ > $@.new
+	$(P) $(PYTHON_EXECUTABLE) $^ > $@.new
 	$(Q) mv $@.new $@
 
 kernel/register.o: techlibs/common/simlib_help.inc techlibs/common/simcells_help.inc
@@ -51,3 +51,5 @@ $(eval $(call add_share_file,share/sdc2.1,techlibs/common/sdc2.1/sdc1.8.tcl))
 $(eval $(call add_share_file,share/sdc2.1,techlibs/common/sdc2.1/sdc2.0.tcl))
 $(eval $(call add_share_file,share/sdc2.1,techlibs/common/sdc2.1/sdcparser.bat))
 $(eval $(call add_share_file,share/sdc2.1,techlibs/common/sdc2.1/sdcparser.tcl))
+$(eval $(call add_share_file,share,techlibs/common/mul2dsp.v))
+$(eval $(call add_share_file,share,techlibs/common/abc9_model.v))

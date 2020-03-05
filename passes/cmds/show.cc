@@ -26,6 +26,10 @@
 #  include <dirent.h>
 #endif
 
+#ifdef __APPLE__
+#  include <unistd.h>
+#endif
+
 #ifdef YOSYS_ENABLE_READLINE
 #  include <readline/readline.h>
 #endif
@@ -527,11 +531,11 @@ struct ShowWorker
 		{
 			currentColor = xorshift32(currentColor);
 			if (wires_on_demand.count(it.first) > 0) {
-				if (it.second.in.size() == 1 && it.second.out.size() > 1 && it.second.in.begin()->substr(0, 1) == "p")
+				if (it.second.in.size() == 1 && it.second.out.size() > 1 && it.second.in.begin()->compare(0, 1, "p") == 0)
 					it.second.out.erase(*it.second.in.begin());
 				if (it.second.in.size() == 1 && it.second.out.size() == 1) {
 					std::string from = *it.second.in.begin(), to = *it.second.out.begin();
-					if (from != to || from.substr(0, 1) != "p")
+					if (from != to || from.compare(0, 1, "p") != 0)
 						fprintf(f, "%s:e -> %s:w [%s, %s];\n", from.c_str(), to.c_str(), nextColor(it.second.color).c_str(), widthLabel(it.second.bits).c_str());
 					continue;
 				}
@@ -664,6 +668,10 @@ struct ShowPass : public Pass {
 		log("    -notitle\n");
 		log("        do not add the module name as graph title to the dot file\n");
 		log("\n");
+		log("    -nobg\n");
+		log("        don't run viewer in the background, IE wait for the viewer tool to\n");
+		log("        exit before returning\n");
+		log("\n");
 		log("When no <format> is specified, 'dot' is used. When no <format> and <viewer> is\n");
 		log("specified, 'xdot' is used to display the schematic (POSIX systems only).\n");
 		log("\n");
@@ -702,6 +710,7 @@ struct ShowPass : public Pass {
 		bool flag_abbreviate = true;
 		bool flag_notitle = false;
 		bool custom_prefix = false;
+		std::string background = "&";
 		RTLIL::IdString colorattr;
 
 		size_t argidx;
@@ -783,6 +792,10 @@ struct ShowPass : public Pass {
 				flag_notitle = true;
 				continue;
 			}
+			if (arg == "-nobg") {
+				background= "";
+				continue;
+			}
 			break;
 		}
 		extra_args(args, argidx, design);
@@ -808,7 +821,7 @@ struct ShowPass : public Pass {
 			if (f.fail())
 				log_error("Can't open lib file `%s'.\n", filename.c_str());
 			RTLIL::Design *lib = new RTLIL::Design;
-			Frontend::frontend_call(lib, &f, filename, (filename.size() > 3 && filename.substr(filename.size()-3) == ".il") ? "ilang" : "verilog");
+			Frontend::frontend_call(lib, &f, filename, (filename.size() > 3 && filename.compare(filename.size()-3, std::string::npos, ".il") == 0 ? "ilang" : "verilog"));
 			libs.push_back(lib);
 		}
 
@@ -855,18 +868,20 @@ struct ShowPass : public Pass {
 				// system()/cmd.exe does not understand single quotes nor
 				// background tasks on Windows. So we have to pause yosys
 				// until the viewer exits.
-				#define VIEW_CMD "%s \"%s\""
+				std::string cmd = stringf("%s \"%s\"", viewer_exe.c_str(), out_file.c_str());
 			#else
-				#define VIEW_CMD "%s '%s' &"
+				std::string cmd = stringf("%s '%s' %s", viewer_exe.c_str(), out_file.c_str(), background.c_str());
 			#endif
-			std::string cmd = stringf(VIEW_CMD, viewer_exe.c_str(), out_file.c_str());
-			#undef VIEW_CMD
 			log("Exec: %s\n", cmd.c_str());
 			if (run_command(cmd) != 0)
 				log_cmd_error("Shell command failed!\n");
 		} else
 		if (format.empty()) {
-			std::string cmd = stringf("{ test -f '%s.pid' && fuser -s '%s.pid'; } || ( echo $$ >&3; exec xdot '%s'; ) 3> '%s.pid' &", dot_file.c_str(), dot_file.c_str(), dot_file.c_str(), dot_file.c_str());
+			#ifdef __APPLE__
+			std::string cmd = stringf("ps -fu %d | grep -q '[ ]%s' || xdot '%s' %s", getuid(), dot_file.c_str(), dot_file.c_str(), background.c_str());
+			#else
+			std::string cmd = stringf("{ test -f '%s.pid' && fuser -s '%s.pid' 2> /dev/null; } || ( echo $$ >&3; exec xdot '%s'; ) 3> '%s.pid' %s", dot_file.c_str(), dot_file.c_str(), dot_file.c_str(), dot_file.c_str(), background.c_str());
+			#endif
 			log("Exec: %s\n", cmd.c_str());
 			if (run_command(cmd) != 0)
 				log_cmd_error("Shell command failed!\n");

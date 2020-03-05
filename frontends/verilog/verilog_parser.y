@@ -38,7 +38,10 @@
 #include <stack>
 #include <string.h>
 #include "frontends/verilog/verilog_frontend.h"
+#include "frontends/verilog/verilog_parser.tab.hh"
 #include "kernel/log.h"
+
+#define YYLEX_PARAM &yylval, &yylloc
 
 USING_YOSYS_NAMESPACE
 using namespace AST;
@@ -67,6 +70,20 @@ namespace VERILOG_FRONTEND {
 	std::istream *lexin;
 }
 YOSYS_NAMESPACE_END
+
+#define SET_AST_NODE_LOC(WHICH, BEGIN, END) \
+    do { (WHICH)->location.first_line = (BEGIN).first_line; \
+    (WHICH)->location.first_column = (BEGIN).first_column; \
+    (WHICH)->location.last_line = (END).last_line; \
+    (WHICH)->location.last_column = (END).last_column; } while(0)
+
+#define SET_RULE_LOC(LHS, BEGIN, END) \
+    do { (LHS).first_line = (BEGIN).first_line; \
+    (LHS).first_column = (BEGIN).first_column; \
+    (LHS).last_line = (END).last_line; \
+    (LHS).last_column = (END).last_column; } while(0)
+
+int frontend_verilog_yylex(YYSTYPE *yylval_param, YYLTYPE *yyloc_param);
 
 static void append_attr(AstNode *ast, std::map<std::string, AstNode*> *al)
 {
@@ -108,9 +125,24 @@ struct specify_rise_fall {
 	specify_triple fall;
 };
 
+static AstNode *makeRange(int msb = 31, int lsb = 0, bool isSigned = true)
+{
+	auto range = new AstNode(AST_RANGE);
+	range->children.push_back(AstNode::mkconst_int(msb, true));
+	range->children.push_back(AstNode::mkconst_int(lsb, true));
+	range->is_signed = isSigned;
+	return range;
+}
+
+static void addRange(AstNode *parent, int msb = 31, int lsb = 0, bool isSigned = true)
+{
+	auto range = makeRange(msb, lsb, isSigned);
+	parent->children.push_back(range);
+}
 %}
 
 %define api.prefix {frontend_verilog_yy}
+%define api.pure
 
 /* The union is defined in the header, so we need to provide all the
  * includes it requires
@@ -133,19 +165,20 @@ struct specify_rise_fall {
 }
 
 %token <string> TOK_STRING TOK_ID TOK_CONSTVAL TOK_REALVAL TOK_PRIMITIVE
-%token <string> TOK_SVA_LABEL TOK_SPECIFY_OPER
+%token <string> TOK_SVA_LABEL TOK_SPECIFY_OPER TOK_MSG_TASKS
 %token TOK_ASSERT TOK_ASSUME TOK_RESTRICT TOK_COVER TOK_FINAL
 %token ATTR_BEGIN ATTR_END DEFATTR_BEGIN DEFATTR_END
 %token TOK_MODULE TOK_ENDMODULE TOK_PARAMETER TOK_LOCALPARAM TOK_DEFPARAM
 %token TOK_PACKAGE TOK_ENDPACKAGE TOK_PACKAGESEP
-%token TOK_INTERFACE TOK_ENDINTERFACE TOK_MODPORT TOK_VAR
-%token TOK_INPUT TOK_OUTPUT TOK_INOUT TOK_WIRE TOK_REG TOK_LOGIC
+%token TOK_INTERFACE TOK_ENDINTERFACE TOK_MODPORT TOK_VAR TOK_WILDCARD_CONNECT
+%token TOK_INPUT TOK_OUTPUT TOK_INOUT TOK_WIRE TOK_WAND TOK_WOR TOK_REG TOK_LOGIC
 %token TOK_INTEGER TOK_SIGNED TOK_ASSIGN TOK_ALWAYS TOK_INITIAL
+%token TOK_ALWAYS_FF TOK_ALWAYS_COMB TOK_ALWAYS_LATCH
 %token TOK_BEGIN TOK_END TOK_IF TOK_ELSE TOK_FOR TOK_WHILE TOK_REPEAT
 %token TOK_DPI_FUNCTION TOK_POSEDGE TOK_NEGEDGE TOK_OR TOK_AUTOMATIC
 %token TOK_CASE TOK_CASEX TOK_CASEZ TOK_ENDCASE TOK_DEFAULT
 %token TOK_FUNCTION TOK_ENDFUNCTION TOK_TASK TOK_ENDTASK TOK_SPECIFY
-%token TOK_IGNORED_SPECIFY TOK_ENDSPECIFY TOK_SPECPARAM TOK_SPECIFY_AND
+%token TOK_IGNORED_SPECIFY TOK_ENDSPECIFY TOK_SPECPARAM TOK_SPECIFY_AND TOK_IGNORED_SPECIFY_AND
 %token TOK_GENERATE TOK_ENDGENERATE TOK_GENVAR TOK_REAL
 %token TOK_SYNOPSYS_FULL_CASE TOK_SYNOPSYS_PARALLEL_CASE
 %token TOK_SUPPLY0 TOK_SUPPLY1 TOK_TO_SIGNED TOK_TO_UNSIGNED
@@ -155,14 +188,15 @@ struct specify_rise_fall {
 
 %type <ast> range range_or_multirange  non_opt_range non_opt_multirange range_or_signed_int
 %type <ast> wire_type expr basic_expr concat_list rvalue lvalue lvalue_concat_list
-%type <string> opt_label opt_sva_label tok_prim_wrapper hierarchical_id
-%type <boolean> opt_signed opt_property unique_case_attr
+%type <string> opt_label opt_sva_label tok_prim_wrapper hierarchical_id hierarchical_type_id
+%type <ast> opt_enum_init
+%type <boolean> opt_signed opt_property unique_case_attr always_comb_or_latch always_or_always_ff
 %type <al> attr case_attr
 
 %type <specify_target_ptr> specify_target
-%type <specify_triple_ptr> specify_triple
+%type <specify_triple_ptr> specify_triple specify_opt_triple
 %type <specify_rise_fall_ptr> specify_rise_fall
-%type <ast> specify_if specify_condition specify_opt_arg
+%type <ast> specify_if specify_condition
 %type <ch> specify_edge
 
 // operator precedence from low to high
@@ -186,6 +220,7 @@ struct specify_rise_fall {
 %nonassoc TOK_ELSE
 
 %debug
+%locations
 
 %%
 
@@ -206,6 +241,7 @@ design:
 	task_func_decl design |
 	param_decl design |
 	localparam_decl design |
+	typedef_decl design |
 	package design |
 	interface design |
 	/* empty */;
@@ -227,7 +263,9 @@ attr:
 	};
 
 attr_opt:
-	attr_opt ATTR_BEGIN opt_attr_list ATTR_END |
+	attr_opt ATTR_BEGIN opt_attr_list ATTR_END {
+		SET_RULE_LOC(@$, @2, @$);
+	}|
 	/* empty */;
 
 defattr:
@@ -274,7 +312,7 @@ hierarchical_id:
 		$$ = $1;
 	} |
 	hierarchical_id TOK_PACKAGESEP TOK_ID {
-		if ($3->substr(0, 1) == "\\")
+		if ($3->compare(0, 1, "\\") == 0)
 			*$1 += "::" + $3->substr(1);
 		else
 			*$1 += "::" + *$3;
@@ -282,13 +320,16 @@ hierarchical_id:
 		$$ = $1;
 	} |
 	hierarchical_id '.' TOK_ID {
-		if ($3->substr(0, 1) == "\\")
+		if ($3->compare(0, 1, "\\") == 0)
 			*$1 += "." + $3->substr(1);
 		else
 			*$1 += "." + *$3;
 		delete $3;
 		$$ = $1;
 	};
+
+hierarchical_type_id:
+	'(' hierarchical_id ')' { $$ = $2; };
 
 module:
 	attr TOK_MODULE TOK_ID {
@@ -306,6 +347,7 @@ module:
 		if (port_stubs.size() != 0)
 			frontend_verilog_yyerror("Missing details for module port `%s'.",
 					port_stubs.begin()->first.c_str());
+		SET_AST_NODE_LOC(ast_stack.back(), @2, @$);
 		ast_stack.pop_back();
 		log_assert(ast_stack.size() == 1);
 		current_ast_mod = NULL;
@@ -319,16 +361,18 @@ module_para_list:
 
 single_module_para:
 	/* empty */ |
-	TOK_PARAMETER {
+	attr TOK_PARAMETER {
 		if (astbuf1) delete astbuf1;
 		astbuf1 = new AstNode(AST_PARAMETER);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_range single_param_decl |
-	TOK_LOCALPARAM {
+		append_attr(astbuf1, $1);
+	} param_type single_param_decl |
+	attr TOK_LOCALPARAM {
 		if (astbuf1) delete astbuf1;
 		astbuf1 = new AstNode(AST_LOCALPARAM);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_range single_param_decl |
+		append_attr(astbuf1, $1);
+	} param_type single_param_decl |
 	single_param_decl;
 
 module_args_opt:
@@ -345,7 +389,13 @@ module_arg_opt_assignment:
 		if (ast_stack.back()->children.size() > 0 && ast_stack.back()->children.back()->type == AST_WIRE) {
 			AstNode *wire = new AstNode(AST_IDENTIFIER);
 			wire->str = ast_stack.back()->children.back()->str;
-			if (ast_stack.back()->children.back()->is_reg)
+			if (ast_stack.back()->children.back()->is_input) {
+				AstNode *n = ast_stack.back()->children.back();
+				if (n->attributes.count("\\defaultvalue"))
+					delete n->attributes.at("\\defaultvalue");
+				n->attributes["\\defaultvalue"] = $2;
+			} else
+			if (ast_stack.back()->children.back()->is_reg || ast_stack.back()->children.back()->is_logic)
 				ast_stack.back()->children.push_back(new AstNode(AST_INITIAL, new AstNode(AST_BLOCK, new AstNode(AST_ASSIGN_LE, wire, $2))));
 			else
 				ast_stack.back()->children.push_back(new AstNode(AST_ASSIGN, wire, $2));
@@ -361,6 +411,7 @@ module_arg:
 			node->str = *$1;
 			node->port_id = ++port_counter;
 			ast_stack.back()->children.push_back(node);
+			SET_AST_NODE_LOC(node, @1, @1);
 		} else {
 			if (port_stubs.count(*$1) != 0)
 				frontend_verilog_yyerror("Duplicate module port `%s'.", $1->c_str());
@@ -386,6 +437,7 @@ module_arg:
 	attr wire_type range TOK_ID {
 		AstNode *node = $2;
 		node->str = *$4;
+		SET_AST_NODE_LOC(node, @4, @4);
 		node->port_id = ++port_counter;
 		if ($3 != NULL)
 			node->children.push_back($3);
@@ -415,9 +467,12 @@ package:
 	};
 
 package_body:
-	package_body package_body_stmt |;
+	package_body package_body_stmt
+	| // optional
+	;
 
 package_body_stmt:
+	typedef_decl |
 	localparam_decl;
 
 interface:
@@ -444,7 +499,7 @@ interface_body:
 	interface_body interface_body_stmt |;
 
 interface_body_stmt:
-	param_decl | localparam_decl | defparam_decl | wire_decl | always_stmt | assign_stmt |
+	param_decl | localparam_decl | typedef_decl | defparam_decl | wire_decl | always_stmt | assign_stmt |
 	modport_stmt;
 
 non_opt_delay:
@@ -462,13 +517,20 @@ wire_type:
 		astbuf3 = new AstNode(AST_WIRE);
 		current_wire_rand = false;
 		current_wire_const = false;
-	} wire_type_token_list delay {
+	} wire_type_token_list {
 		$$ = astbuf3;
+		SET_RULE_LOC(@$, @2, @$);
 	};
 
 wire_type_token_list:
-	wire_type_token | wire_type_token_list wire_type_token |
-	wire_type_token_io ;
+	wire_type_token |
+	wire_type_token_list wire_type_token |
+	wire_type_token_io |
+	hierarchical_type_id {
+		astbuf3->is_custom_type = true;
+		astbuf3->children.push_back(new AstNode(AST_WIRETYPE));
+		astbuf3->children.back()->str = *$1;
+	};
 
 wire_type_token_io:
 	TOK_INPUT {
@@ -484,6 +546,12 @@ wire_type_token_io:
 
 wire_type_token:
 	TOK_WIRE {
+	} |
+	TOK_WOR {
+		astbuf3->is_wor = true;
+	} |
+	TOK_WAND {
+		astbuf3->is_wand = true;
 	} |
 	TOK_REG {
 		astbuf3->is_reg = true;
@@ -503,6 +571,7 @@ wire_type_token:
 	TOK_GENVAR {
 		astbuf3->type = AST_GENVAR;
 		astbuf3->is_reg = true;
+		astbuf3->is_signed = true;
 		astbuf3->range_left = 31;
 		astbuf3->range_right = 0;
 	} |
@@ -576,7 +645,8 @@ module_body:
 	/* empty */;
 
 module_body_stmt:
-	task_func_decl | specify_block |param_decl | localparam_decl | defparam_decl | specparam_declaration | wire_decl | assign_stmt | cell_stmt |
+	task_func_decl | specify_block | param_decl | localparam_decl | typedef_decl | defparam_decl | specparam_declaration | wire_decl | assign_stmt | cell_stmt |
+	enum_decl |
 	always_stmt | TOK_GENERATE module_gen_body TOK_ENDGENERATE | defattr | assert_property | checker_decl | ignored_specify_block;
 
 checker_decl:
@@ -828,7 +898,7 @@ specify_item:
 		delete target;
 		delete timing;
 	} |
-	TOK_ID '(' specify_edge expr specify_condition ',' specify_edge expr specify_condition ',' expr specify_opt_arg ')' ';' {
+	TOK_ID '(' specify_edge expr specify_condition ',' specify_edge expr specify_condition ',' specify_triple specify_opt_triple ')' ';' {
 		if (*$1 != "$setup" && *$1 != "$hold" && *$1 != "$setuphold" && *$1 != "$removal" && *$1 != "$recovery" &&
 				*$1 != "$recrem" && *$1 != "$skew" && *$1 != "$timeskew" && *$1 != "$fullskew" && *$1 != "$nochange")
 			frontend_verilog_yyerror("Unsupported specify rule type: %s\n", $1->c_str());
@@ -841,8 +911,8 @@ specify_item:
 		AstNode *dst_pol = AstNode::mkconst_int($7 == 'p', false, 1);
 		AstNode *dst_expr = $8, *dst_en = $9 ? $9 : AstNode::mkconst_int(1, false, 1);
 
-		AstNode *limit = $11;
-		AstNode *limit2 = $12;
+		specify_triple *limit = $11;
+		specify_triple *limit2 = $12;
 
 		AstNode *cell = new AstNode(AST_CELL);
 		ast_stack.back()->children.push_back(cell);
@@ -853,11 +923,23 @@ specify_item:
 		cell->children.push_back(new AstNode(AST_PARASET, AstNode::mkconst_str(*$1)));
 		cell->children.back()->str = "\\TYPE";
 
-		cell->children.push_back(new AstNode(AST_PARASET, limit));
-		cell->children.back()->str = "\\T_LIMIT";
+		cell->children.push_back(new AstNode(AST_PARASET, limit->t_min));
+		cell->children.back()->str = "\\T_LIMIT_MIN";
 
-		cell->children.push_back(new AstNode(AST_PARASET, limit2 ? limit2 : AstNode::mkconst_int(0, true)));
-		cell->children.back()->str = "\\T_LIMIT2";
+		cell->children.push_back(new AstNode(AST_PARASET, limit->t_avg));
+		cell->children.back()->str = "\\T_LIMIT_TYP";
+
+		cell->children.push_back(new AstNode(AST_PARASET, limit->t_max));
+		cell->children.back()->str = "\\T_LIMIT_MAX";
+
+		cell->children.push_back(new AstNode(AST_PARASET, limit2 ? limit2->t_min : AstNode::mkconst_int(0, true)));
+		cell->children.back()->str = "\\T_LIMIT2_MIN";
+
+		cell->children.push_back(new AstNode(AST_PARASET, limit2 ? limit2->t_avg : AstNode::mkconst_int(0, true)));
+		cell->children.back()->str = "\\T_LIMIT2_TYP";
+
+		cell->children.push_back(new AstNode(AST_PARASET, limit2 ? limit2->t_max : AstNode::mkconst_int(0, true)));
+		cell->children.back()->str = "\\T_LIMIT2_MAX";
 
 		cell->children.push_back(new AstNode(AST_PARASET, src_pen));
 		cell->children.back()->str = "\\SRC_PEN";
@@ -886,8 +968,8 @@ specify_item:
 		delete $1;
 	};
 
-specify_opt_arg:
-	',' expr {
+specify_opt_triple:
+	',' specify_triple {
 		$$ = $2;
 	} |
 	/* empty */ {
@@ -956,7 +1038,46 @@ specify_rise_fall:
 		$$->fall = *$4;
 		delete $2;
 		delete $4;
-	};
+	} |
+	'(' specify_triple ',' specify_triple ',' specify_triple ')' {
+		$$ = new specify_rise_fall;
+		$$->rise = *$2;
+		$$->fall = *$4;
+		delete $2;
+		delete $4;
+        delete $6;
+        log_file_warning(current_filename, get_line_num(), "Path delay expressions beyond rise/fall not currently supported. Ignoring.\n");
+	} |
+	'(' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ')' {
+		$$ = new specify_rise_fall;
+		$$->rise = *$2;
+		$$->fall = *$4;
+		delete $2;
+		delete $4;
+        delete $6;
+        delete $8;
+        delete $10;
+        delete $12;
+        log_file_warning(current_filename, get_line_num(), "Path delay expressions beyond rise/fall not currently supported. Ignoring.\n");
+	} |
+	'(' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ',' specify_triple ')' {
+		$$ = new specify_rise_fall;
+		$$->rise = *$2;
+		$$->fall = *$4;
+		delete $2;
+		delete $4;
+        delete $6;
+        delete $8;
+        delete $10;
+        delete $12;
+        delete $14;
+        delete $16;
+        delete $18;
+        delete $20;
+        delete $22;
+        delete $24;
+        log_file_warning(current_filename, get_line_num(), "Path delay expressions beyond rise/fall not currently supported. Ignoring.\n");
+	}
 
 specify_triple:
 	expr {
@@ -1004,15 +1125,10 @@ list_of_specparam_assignments:
 	specparam_assignment | list_of_specparam_assignments ',' specparam_assignment;
 
 specparam_assignment:
-	ignspec_id '=' constant_mintypmax_expression ;
+	ignspec_id '=' ignspec_expr ;
 
-/*
-pulsestyle_declaration :
-	;
-
-showcancelled_declaration :
-	;
-*/
+ignspec_opt_cond:
+	TOK_IF '(' ignspec_expr ')' | /* empty */;
 
 path_declaration :
 	simple_path_declaration ';'
@@ -1021,43 +1137,33 @@ path_declaration :
 	;
 
 simple_path_declaration :
-	parallel_path_description '=' path_delay_value |
-	full_path_description '=' path_delay_value
+	ignspec_opt_cond parallel_path_description '=' path_delay_value |
+	ignspec_opt_cond full_path_description '=' path_delay_value
 	;
 
 path_delay_value :
-	'(' path_delay_expression list_of_path_delay_extra_expressions ')'
-	|     path_delay_expression
-	|     path_delay_expression list_of_path_delay_extra_expressions
+	'(' ignspec_expr list_of_path_delay_extra_expressions ')'
+	|     ignspec_expr
+	|     ignspec_expr list_of_path_delay_extra_expressions
 	;
 
 list_of_path_delay_extra_expressions :
-/*
-	t_path_delay_expression
-	| trise_path_delay_expression ',' tfall_path_delay_expression
-	| trise_path_delay_expression ',' tfall_path_delay_expression ',' tz_path_delay_expression
-	| t01_path_delay_expression ',' t10_path_delay_expression ',' t0z_path_delay_expression ','
-	  tz1_path_delay_expression ',' t1z_path_delay_expression ',' tz0_path_delay_expression
-	| t01_path_delay_expression ',' t10_path_delay_expression ',' t0z_path_delay_expression ','
-	  tz1_path_delay_expression ',' t1z_path_delay_expression ',' tz0_path_delay_expression ','
-	  t0x_path_delay_expression ',' tx1_path_delay_expression ',' t1x_path_delay_expression ','
-	  tx0_path_delay_expression ',' txz_path_delay_expression ',' tzx_path_delay_expression
-*/
-	',' path_delay_expression
-	|  ',' path_delay_expression ',' path_delay_expression
-	|  ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression
-	|  ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression ','
-	  path_delay_expression ',' path_delay_expression ',' path_delay_expression
+	',' ignspec_expr
+	| ',' ignspec_expr list_of_path_delay_extra_expressions
 	;
 
+specify_edge_identifier :
+	TOK_POSEDGE | TOK_NEGEDGE ;
+
 parallel_path_description :
-	'(' specify_input_terminal_descriptor opt_polarity_operator '=' '>' specify_output_terminal_descriptor ')' ;
+	'(' specify_input_terminal_descriptor opt_polarity_operator '=' '>' specify_output_terminal_descriptor ')' |
+	'(' specify_edge_identifier specify_input_terminal_descriptor '=' '>' '(' specify_output_terminal_descriptor opt_polarity_operator ':' ignspec_expr ')' ')' |
+	'(' specify_edge_identifier specify_input_terminal_descriptor '=' '>' '(' specify_output_terminal_descriptor TOK_POS_INDEXED ignspec_expr ')' ')' ;
 
 full_path_description :
-	'(' list_of_path_inputs '*' '>' list_of_path_outputs ')' ;
+	'(' list_of_path_inputs '*' '>' list_of_path_outputs ')' |
+	'(' specify_edge_identifier list_of_path_inputs '*' '>' '(' list_of_path_outputs opt_polarity_operator ':' ignspec_expr ')' ')' |
+	'(' specify_edge_identifier list_of_path_inputs '*' '>' '(' list_of_path_outputs TOK_POS_INDEXED ignspec_expr ')' ')' ;
 
 // This was broken into 2 rules to solve shift/reduce conflicts
 list_of_path_inputs :
@@ -1095,65 +1201,8 @@ system_timing_arg :
 
 system_timing_args :
 	system_timing_arg |
+	system_timing_args TOK_IGNORED_SPECIFY_AND system_timing_arg |
 	system_timing_args ',' system_timing_arg ;
-
-/*
-t_path_delay_expression :
-	path_delay_expression;
-
-trise_path_delay_expression :
-	path_delay_expression;
-
-tfall_path_delay_expression :
-	path_delay_expression;
-
-tz_path_delay_expression :
-	path_delay_expression;
-
-t01_path_delay_expression :
-	path_delay_expression;
-
-t10_path_delay_expression :
-	path_delay_expression;
-
-t0z_path_delay_expression :
-	path_delay_expression;
-
-tz1_path_delay_expression :
-	path_delay_expression;
-
-t1z_path_delay_expression :
-	path_delay_expression;
-
-tz0_path_delay_expression :
-	path_delay_expression;
-
-t0x_path_delay_expression :
-	path_delay_expression;
-
-tx1_path_delay_expression :
-	path_delay_expression;
-
-t1x_path_delay_expression :
-	path_delay_expression;
-
-tx0_path_delay_expression :
-	path_delay_expression;
-
-txz_path_delay_expression :
-	path_delay_expression;
-
-tzx_path_delay_expression :
-	path_delay_expression;
-*/
-
-path_delay_expression :
-	ignspec_constant_expression;
-
-constant_mintypmax_expression :
-	ignspec_constant_expression
-	| ignspec_constant_expression ':' ignspec_constant_expression ':' ignspec_constant_expression
-	;
 
 // for the time being this is OK, but we may write our own expr here.
 // as I'm not sure it is legal to use a full expr here (probably not)
@@ -1163,10 +1212,16 @@ ignspec_constant_expression:
 	expr { delete $1; };
 
 ignspec_expr:
-	expr { delete $1; };
+	expr { delete $1; } |
+	expr ':' expr ':' expr {
+		delete $1;
+		delete $3;
+		delete $5;
+	};
 
 ignspec_id:
-	TOK_ID { delete $1; };
+	TOK_ID { delete $1; }
+	range_or_multirange { delete $3; };
 
 /**********************************************************************/
 
@@ -1201,11 +1256,20 @@ param_range:
 		}
 	};
 
+param_type:
+	param_signed param_integer param_real param_range |
+	hierarchical_type_id {
+		astbuf1->is_custom_type = true;
+		astbuf1->children.push_back(new AstNode(AST_WIRETYPE));
+		astbuf1->children.back()->str = *$1;
+	};
+
 param_decl:
 	attr TOK_PARAMETER {
 		astbuf1 = new AstNode(AST_PARAMETER);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_real param_range param_decl_list ';' {
+		append_attr(astbuf1, $1);
+	} param_type param_decl_list ';' {
 		delete astbuf1;
 	};
 
@@ -1213,7 +1277,8 @@ localparam_decl:
 	attr TOK_LOCALPARAM {
 		astbuf1 = new AstNode(AST_LOCALPARAM);
 		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
-	} param_signed param_integer param_real param_range param_decl_list ';' {
+		append_attr(astbuf1, $1);
+	} param_type param_decl_list ';' {
 		delete astbuf1;
 	};
 
@@ -1254,6 +1319,85 @@ single_defparam_decl:
 		ast_stack.back()->children.push_back(node);
 	};
 
+enum_type: TOK_ENUM {
+		static int enum_count;
+		// create parent node for the enum
+		astbuf2 = new AstNode(AST_ENUM);
+		ast_stack.back()->children.push_back(astbuf2);
+		astbuf2->str = std::string("$enum");
+		astbuf2->str += std::to_string(enum_count++);
+		// create the template for the names
+		astbuf1 = new AstNode(AST_ENUM_ITEM);
+		astbuf1->children.push_back(AstNode::mkconst_int(0, true));
+	 } param_signed enum_base_type '{' enum_name_list '}' {  // create template for the enum vars
+								auto tnode = astbuf1->clone();
+								delete astbuf1;
+								astbuf1 = tnode;
+								tnode->type = AST_WIRE;
+								tnode->attributes["\\enum_type"] = AstNode::mkconst_str(astbuf2->str);
+								// drop constant but keep any range
+								delete tnode->children[0];
+								tnode->children.erase(tnode->children.begin()); }
+	 ;
+
+enum_base_type: int_vec param_range
+	| int_atom
+	| /* nothing */		{astbuf1->is_reg = true; addRange(astbuf1); }
+	;
+
+int_atom: TOK_INTEGER		{astbuf1->is_reg=true; addRange(astbuf1); }		// probably should do byte, range [7:0] here
+	;
+
+int_vec: TOK_REG {astbuf1->is_reg = true;}
+	| TOK_LOGIC  {astbuf1->is_logic = true;}
+	;
+
+enum_name_list:
+	enum_name_decl
+	| enum_name_list ',' enum_name_decl
+	;
+
+enum_name_decl:
+	TOK_ID opt_enum_init {
+		// put in fn
+		log_assert(astbuf1);
+		log_assert(astbuf2);
+		auto node = astbuf1->clone();
+		node->str = *$1;
+		delete $1;
+		delete node->children[0];
+		node->children[0] = $2 ?: new AstNode(AST_NONE);
+		astbuf2->children.push_back(node);
+	}
+	;
+
+opt_enum_init:
+	'=' basic_expr		{ $$ = $2; }	// TODO: restrict this
+	| /* optional */	{ $$ = NULL; }
+	;
+
+enum_var_list:
+	enum_var
+	| enum_var_list ',' enum_var
+	;
+
+enum_var: TOK_ID {
+		log_assert(astbuf1);
+		log_assert(astbuf2);
+		auto node = astbuf1->clone();
+		ast_stack.back()->children.push_back(node);
+		node->str = *$1;
+		delete $1;
+		node->is_enum = true;
+	}
+	;
+
+enum_decl: enum_type enum_var_list ';'			{
+		//enum_type creates astbuf1 for use by typedef only
+		delete astbuf1;
+	}
+	;
+
 wire_decl:
 	attr wire_type range {
 		albuf = $1;
@@ -1270,7 +1414,7 @@ wire_decl:
 		}
 		if (astbuf2 && astbuf2->children.size() != 2)
 			frontend_verilog_yyerror("wire/reg/logic packed dimension must be of the form: [<expr>:<expr>], [<expr>+:<expr>], or [<expr>-:<expr>]");
-	} wire_name_list {
+	} delay wire_name_list {
 		delete astbuf1;
 		if (astbuf2 != NULL)
 			delete astbuf2;
@@ -1354,10 +1498,28 @@ wire_name_and_opt_assign:
 	wire_name '=' expr {
 		AstNode *wire = new AstNode(AST_IDENTIFIER);
 		wire->str = ast_stack.back()->children.back()->str;
-		if (astbuf1->is_reg)
-			ast_stack.back()->children.push_back(new AstNode(AST_INITIAL, new AstNode(AST_BLOCK, new AstNode(AST_ASSIGN_LE, wire, $3))));
-		else
-			ast_stack.back()->children.push_back(new AstNode(AST_ASSIGN, wire, $3));
+		if (astbuf1->is_input) {
+			if (astbuf1->attributes.count("\\defaultvalue"))
+				delete astbuf1->attributes.at("\\defaultvalue");
+			astbuf1->attributes["\\defaultvalue"] = $3;
+		}
+		else if (astbuf1->is_reg || astbuf1->is_logic){
+			AstNode *assign = new AstNode(AST_ASSIGN_LE, wire, $3);
+			AstNode *block = new AstNode(AST_BLOCK, assign);
+			AstNode *init = new AstNode(AST_INITIAL, block);
+
+			SET_AST_NODE_LOC(assign, @1, @3);
+			SET_AST_NODE_LOC(block, @1, @3);
+			SET_AST_NODE_LOC(init, @1, @3);
+
+			ast_stack.back()->children.push_back(init);
+		}
+		else {
+			AstNode *assign = new AstNode(AST_ASSIGN, wire, $3);
+			SET_AST_NODE_LOC(assign, @1, @3);
+			ast_stack.back()->children.push_back(assign);
+		}
+
 	};
 
 wire_name:
@@ -1372,14 +1534,20 @@ wire_name:
 		if ($2 != NULL) {
 			if (node->is_input || node->is_output)
 				frontend_verilog_yyerror("input/output/inout ports cannot have unpacked dimensions.");
-			if (!astbuf2) {
+			if (!astbuf2 && !node->is_custom_type) {
 				AstNode *rng = new AstNode(AST_RANGE);
 				rng->children.push_back(AstNode::mkconst_int(0, true));
 				rng->children.push_back(AstNode::mkconst_int(0, true));
 				node->children.push_back(rng);
 			}
 			node->type = AST_MEMORY;
-			node->children.push_back($2);
+			auto *rangeNode = $2;
+			if (rangeNode->type == AST_RANGE && rangeNode->children.size() == 1) {
+				// SV array size [n], rewrite as [n-1:0]
+				rangeNode->children[0] = new AstNode(AST_SUB, rangeNode->children[0], AstNode::mkconst_int(1, true));
+				rangeNode->children.push_back(AstNode::mkconst_int(0, false));
+			}
+			node->children.push_back(rangeNode);
 		}
 		if (current_function_or_task == NULL) {
 			if (do_not_require_port_stubs && (node->is_input || node->is_output) && port_stubs.count(*$1) == 0) {
@@ -1400,6 +1568,8 @@ wire_name:
 			if (node->is_input || node->is_output)
 				node->port_id = current_function_or_task_port_id++;
 		}
+		//FIXME: for some reason, TOK_ID has a location which always points to one column *after* the real last column...
+		SET_AST_NODE_LOC(node, @1, @1);
 		ast_stack.back()->children.push_back(node);
 
 		delete $1;
@@ -1413,8 +1583,54 @@ assign_expr_list:
 
 assign_expr:
 	lvalue '=' expr {
-		ast_stack.back()->children.push_back(new AstNode(AST_ASSIGN, $1, $3));
+		AstNode *node = new AstNode(AST_ASSIGN, $1, $3);
+		SET_AST_NODE_LOC(node, @$, @$);
+		ast_stack.back()->children.push_back(node);
 	};
+
+typedef_decl:
+	TOK_TYPEDEF wire_type range TOK_ID range_or_multirange ';' {
+		astbuf1 = $2;
+		astbuf2 = $3;
+		if (astbuf1->range_left >= 0 && astbuf1->range_right >= 0) {
+			if (astbuf2) {
+				frontend_verilog_yyerror("integer/genvar types cannot have packed dimensions.");
+			} else {
+				astbuf2 = new AstNode(AST_RANGE);
+				astbuf2->children.push_back(AstNode::mkconst_int(astbuf1->range_left, true));
+				astbuf2->children.push_back(AstNode::mkconst_int(astbuf1->range_right, true));
+			}
+		}
+		if (astbuf2 && astbuf2->children.size() != 2)
+			frontend_verilog_yyerror("wire/reg/logic packed dimension must be of the form: [<expr>:<expr>], [<expr>+:<expr>], or [<expr>-:<expr>]");
+		if (astbuf2)
+			astbuf1->children.push_back(astbuf2);
+
+		if ($5 != NULL) {
+			if (!astbuf2) {
+				AstNode *rng = new AstNode(AST_RANGE);
+				rng->children.push_back(AstNode::mkconst_int(0, true));
+				rng->children.push_back(AstNode::mkconst_int(0, true));
+				astbuf1->children.push_back(rng);
+			}
+			astbuf1->type = AST_MEMORY;
+			auto *rangeNode = $5;
+			if (rangeNode->type == AST_RANGE && rangeNode->children.size() == 1) {
+				// SV array size [n], rewrite as [n-1:0]
+				rangeNode->children[0] = new AstNode(AST_SUB, rangeNode->children[0], AstNode::mkconst_int(1, true));
+				rangeNode->children.push_back(AstNode::mkconst_int(0, false));
+			}
+			astbuf1->children.push_back(rangeNode);
+		}
+
+		ast_stack.back()->children.push_back(new AstNode(AST_TYPEDEF, astbuf1));
+		ast_stack.back()->children.back()->str = *$4;
+	} |
+	TOK_TYPEDEF enum_type TOK_ID ';' {
+		ast_stack.back()->children.push_back(new AstNode(AST_TYPEDEF, astbuf1));
+		ast_stack.back()->children.back()->str = *$3;
+	}
+	;
 
 cell_stmt:
 	attr TOK_ID {
@@ -1454,14 +1670,19 @@ single_cell:
 			astbuf2->str = *$1;
 		delete $1;
 		ast_stack.back()->children.push_back(astbuf2);
-	} '(' cell_port_list ')' |
+	} '(' cell_port_list ')' {
+		SET_AST_NODE_LOC(astbuf2, @1, @$);
+	} |
 	TOK_ID non_opt_range {
 		astbuf2 = astbuf1->clone();
 		if (astbuf2->type != AST_PRIMITIVE)
 			astbuf2->str = *$1;
 		delete $1;
 		ast_stack.back()->children.push_back(new AstNode(AST_CELLARRAY, $2, astbuf2));
-	} '(' cell_port_list ')';
+	} '(' cell_port_list ')'{
+		SET_AST_NODE_LOC(astbuf2, @1, @$);
+		SET_AST_NODE_LOC(astbuf3, @1, @$);
+	};
 
 prim_list:
 	single_prim |
@@ -1526,36 +1747,93 @@ cell_port_list_rules:
 	cell_port | cell_port_list_rules ',' cell_port;
 
 cell_port:
-	/* empty */ {
+	attr {
 		AstNode *node = new AstNode(AST_ARGUMENT);
 		astbuf2->children.push_back(node);
+		free_attr($1);
 	} |
-	expr {
+	attr expr {
 		AstNode *node = new AstNode(AST_ARGUMENT);
 		astbuf2->children.push_back(node);
-		node->children.push_back($1);
+		node->children.push_back($2);
+		free_attr($1);
 	} |
-	'.' TOK_ID '(' expr ')' {
+	attr '.' TOK_ID '(' expr ')' {
 		AstNode *node = new AstNode(AST_ARGUMENT);
-		node->str = *$2;
+		node->str = *$3;
 		astbuf2->children.push_back(node);
-		node->children.push_back($4);
-		delete $2;
+		node->children.push_back($5);
+		delete $3;
+		free_attr($1);
 	} |
-	'.' TOK_ID '(' ')' {
+	attr '.' TOK_ID '(' ')' {
 		AstNode *node = new AstNode(AST_ARGUMENT);
-		node->str = *$2;
+		node->str = *$3;
 		astbuf2->children.push_back(node);
-		delete $2;
+		delete $3;
+		free_attr($1);
+	} |
+	attr '.' TOK_ID {
+		AstNode *node = new AstNode(AST_ARGUMENT);
+		node->str = *$3;
+		astbuf2->children.push_back(node);
+		node->children.push_back(new AstNode(AST_IDENTIFIER));
+		node->children.back()->str = *$3;
+		delete $3;
+		free_attr($1);
+	} |
+	attr TOK_WILDCARD_CONNECT {
+		if (!sv_mode)
+			frontend_verilog_yyerror("Wildcard port connections are only supported in SystemVerilog mode.");
+		astbuf2->attributes[ID(wildcard_port_conns)] = AstNode::mkconst_int(1, false);
+	};
+
+always_comb_or_latch:
+	TOK_ALWAYS_COMB {
+		$$ = false;
+	} |
+	TOK_ALWAYS_LATCH {
+		$$ = true;
+	};
+
+always_or_always_ff:
+	TOK_ALWAYS {
+		$$ = false;
+	} |
+	TOK_ALWAYS_FF {
+		$$ = true;
 	};
 
 always_stmt:
-	attr TOK_ALWAYS {
+	attr always_or_always_ff {
 		AstNode *node = new AstNode(AST_ALWAYS);
 		append_attr(node, $1);
+		if ($2)
+			node->attributes[ID(always_ff)] = AstNode::mkconst_int(1, false);
 		ast_stack.back()->children.push_back(node);
 		ast_stack.push_back(node);
 	} always_cond {
+		AstNode *block = new AstNode(AST_BLOCK);
+		ast_stack.back()->children.push_back(block);
+		ast_stack.push_back(block);
+	} behavioral_stmt {
+		SET_AST_NODE_LOC(ast_stack.back(), @6, @6);
+		ast_stack.pop_back();
+
+		SET_AST_NODE_LOC(ast_stack.back(), @2, @$);
+		ast_stack.pop_back();
+
+		SET_RULE_LOC(@$, @2, @$);
+	} |
+	attr always_comb_or_latch {
+		AstNode *node = new AstNode(AST_ALWAYS);
+		append_attr(node, $1);
+		if ($2)
+			node->attributes[ID(always_latch)] = AstNode::mkconst_int(1, false);
+		else
+			node->attributes[ID(always_comb)] = AstNode::mkconst_int(1, false);
+		ast_stack.back()->children.push_back(node);
+		ast_stack.push_back(node);
 		AstNode *block = new AstNode(AST_BLOCK);
 		ast_stack.back()->children.push_back(block);
 		ast_stack.push_back(block);
@@ -1849,10 +2127,20 @@ simple_behavioral_stmt:
 
 // this production creates the obligatory if-else shift/reduce conflict
 behavioral_stmt:
-	defattr | assert | wire_decl | param_decl | localparam_decl |
+	defattr | assert | wire_decl | param_decl | localparam_decl | typedef_decl |
 	non_opt_delay behavioral_stmt |
 	simple_behavioral_stmt ';' | ';' |
 	hierarchical_id attr {
+		AstNode *node = new AstNode(AST_TCALL);
+		node->str = *$1;
+		delete $1;
+		ast_stack.back()->children.push_back(node);
+		ast_stack.push_back(node);
+		append_attr(node, $2);
+	} opt_arg_list ';'{
+		ast_stack.pop_back();
+	} |
+	TOK_MSG_TASKS attr {
 		AstNode *node = new AstNode(AST_TCALL);
 		node->str = *$1;
 		delete $1;
@@ -1890,6 +2178,7 @@ behavioral_stmt:
 		ast_stack.back()->children.push_back(block);
 		ast_stack.push_back(block);
 	} behavioral_stmt {
+		SET_AST_NODE_LOC(ast_stack.back(), @13, @13);
 		ast_stack.pop_back();
 		ast_stack.pop_back();
 	} |
@@ -1903,6 +2192,7 @@ behavioral_stmt:
 		ast_stack.back()->children.push_back(block);
 		ast_stack.push_back(block);
 	} behavioral_stmt {
+		SET_AST_NODE_LOC(ast_stack.back(), @7, @7);
 		ast_stack.pop_back();
 		ast_stack.pop_back();
 	} |
@@ -1916,6 +2206,7 @@ behavioral_stmt:
 		ast_stack.back()->children.push_back(block);
 		ast_stack.push_back(block);
 	} behavioral_stmt {
+		SET_AST_NODE_LOC(ast_stack.back(), @7, @7);
 		ast_stack.pop_back();
 		ast_stack.pop_back();
 	} |
@@ -1923,14 +2214,18 @@ behavioral_stmt:
 		AstNode *node = new AstNode(AST_CASE);
 		AstNode *block = new AstNode(AST_BLOCK);
 		AstNode *cond = new AstNode(AST_COND, AstNode::mkconst_int(1, false, 1), block);
+		SET_AST_NODE_LOC(cond, @4, @4);
 		ast_stack.back()->children.push_back(node);
 		node->children.push_back(new AstNode(AST_REDUCE_BOOL, $4));
 		node->children.push_back(cond);
 		ast_stack.push_back(node);
 		ast_stack.push_back(block);
 		append_attr(node, $1);
-	} behavioral_stmt optional_else {
+	} behavioral_stmt {
+		SET_AST_NODE_LOC(ast_stack.back(), @7, @7);
+	} optional_else {
 		ast_stack.pop_back();
+		SET_AST_NODE_LOC(ast_stack.back(), @2, @9);
 		ast_stack.pop_back();
 	} |
 	case_attr case_type '(' expr ')' {
@@ -1938,7 +2233,9 @@ behavioral_stmt:
 		ast_stack.back()->children.push_back(node);
 		ast_stack.push_back(node);
 		append_attr(node, $1);
+		SET_AST_NODE_LOC(ast_stack.back(), @4, @4);
 	} opt_synopsys_attr case_body TOK_ENDCASE {
+		SET_AST_NODE_LOC(ast_stack.back(), @2, @9);
 		case_type_stack.pop_back();
 		ast_stack.pop_back();
 	};
@@ -1990,10 +2287,14 @@ optional_else:
 	TOK_ELSE {
 		AstNode *block = new AstNode(AST_BLOCK);
 		AstNode *cond = new AstNode(AST_COND, new AstNode(AST_DEFAULT), block);
+		SET_AST_NODE_LOC(cond, @1, @1);
+
 		ast_stack.pop_back();
 		ast_stack.back()->children.push_back(cond);
 		ast_stack.push_back(block);
-	} behavioral_stmt |
+	} behavioral_stmt {
+		SET_AST_NODE_LOC(ast_stack.back(), @3, @3);
+	} |
 	/* empty */ %prec FAKE_THEN;
 
 case_body:
@@ -2014,6 +2315,7 @@ case_item:
 		case_type_stack.push_back(0);
 	} behavioral_stmt {
 		case_type_stack.pop_back();
+		SET_AST_NODE_LOC(ast_stack.back(), @4, @4);
 		ast_stack.pop_back();
 		ast_stack.pop_back();
 	};
@@ -2157,6 +2459,15 @@ gen_stmt:
 		if ($6 != NULL)
 			delete $6;
 		ast_stack.pop_back();
+	} |
+	TOK_MSG_TASKS {
+		AstNode *node = new AstNode(AST_TECALL);
+		node->str = *$1;
+		delete $1;
+		ast_stack.back()->children.push_back(node);
+		ast_stack.push_back(node);
+	} opt_arg_list ';'{
+		ast_stack.pop_back();
 	};
 
 gen_stmt_block:
@@ -2191,7 +2502,7 @@ basic_expr:
 		$$ = $1;
 	} |
 	'(' expr ')' TOK_CONSTVAL {
-		if ($4->substr(0, 1) != "'")
+		if ($4->compare(0, 1, "'") != 0)
 			frontend_verilog_yyerror("Cast operation must be applied on sized constants e.g. (<expr>)<constval> , while %s is not a sized constant.", $4->c_str());
 		AstNode *bits = $2;
 		AstNode *val = const2ast(*$4, case_type_stack.size() == 0 ? 0 : case_type_stack.back(), !lib_mode);
@@ -2201,7 +2512,7 @@ basic_expr:
 		delete $4;
 	} |
 	hierarchical_id TOK_CONSTVAL {
-		if ($2->substr(0, 1) != "'")
+		if ($2->compare(0, 1, "'") != 0)
 			frontend_verilog_yyerror("Cast operation must be applied on sized constants, e.g. <ID>\'d0, while %s is not a sized constant.", $2->c_str());
 		AstNode *bits = new AstNode(AST_IDENTIFIER);
 		bits->str = *$1;
@@ -2327,19 +2638,19 @@ basic_expr:
 		append_attr($$, $2);
 	} |
 	basic_expr OP_SHL attr basic_expr {
-		$$ = new AstNode(AST_SHIFT_LEFT, $1, $4);
+		$$ = new AstNode(AST_SHIFT_LEFT, $1, new AstNode(AST_TO_UNSIGNED, $4));
 		append_attr($$, $3);
 	} |
 	basic_expr OP_SHR attr basic_expr {
-		$$ = new AstNode(AST_SHIFT_RIGHT, $1, $4);
+		$$ = new AstNode(AST_SHIFT_RIGHT, $1, new AstNode(AST_TO_UNSIGNED, $4));
 		append_attr($$, $3);
 	} |
 	basic_expr OP_SSHL attr basic_expr {
-		$$ = new AstNode(AST_SHIFT_SLEFT, $1, $4);
+		$$ = new AstNode(AST_SHIFT_SLEFT, $1, new AstNode(AST_TO_UNSIGNED, $4));
 		append_attr($$, $3);
 	} |
 	basic_expr OP_SSHR attr basic_expr {
-		$$ = new AstNode(AST_SHIFT_SRIGHT, $1, $4);
+		$$ = new AstNode(AST_SHIFT_SRIGHT, $1, new AstNode(AST_TO_UNSIGNED, $4));
 		append_attr($$, $3);
 	} |
 	basic_expr '<' attr basic_expr {

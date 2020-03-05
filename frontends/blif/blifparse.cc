@@ -78,7 +78,7 @@ failed:
 	return std::pair<RTLIL::IdString, int>("\\" + name, 0);
 }
 
-void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bool run_clean, bool sop_mode, bool wideports, bool readnames)
+void parse_blif(RTLIL::Design *design, std::istream &f, IdString dff_name, bool run_clean, bool sop_mode, bool wideports, bool readnames)
 {
 	RTLIL::Module *module = nullptr;
 	RTLIL::Const *lutptr = NULL;
@@ -184,6 +184,12 @@ void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bo
 
 			if (module == nullptr)
 				goto error;
+
+			if (!strcmp(cmd, ".blackbox"))
+			{
+				module->attributes["\\blackbox"] = RTLIL::Const(1);
+				continue;
+			}
 
 			if (!strcmp(cmd, ".end"))
 			{
@@ -291,7 +297,7 @@ void parse_blif(RTLIL::Design *design, std::istream &f, std::string dff_name, bo
 					goto error_with_reason;
 				}
 
-				module->rename(lastcell, p);
+				module->rename(lastcell, RTLIL::escape_id(p));
 				continue;
 			}
 

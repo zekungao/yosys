@@ -50,8 +50,10 @@ extern std::vector<FILE*> log_files;
 extern std::vector<std::ostream*> log_streams;
 extern std::map<std::string, std::set<std::string>> log_hdump;
 extern std::vector<std::regex> log_warn_regexes, log_nowarn_regexes, log_werror_regexes;
-extern std::set<std::string> log_warnings;
+extern std::set<std::string> log_warnings, log_experimentals, log_experimentals_ignored;
 extern int log_warnings_count;
+extern int log_warnings_count_noexpect;
+extern bool log_expect_no_warnings;
 extern bool log_hdump_all;
 extern FILE *log_errfile;
 extern SHA1 *log_hasher;
@@ -77,9 +79,11 @@ YS_NORETURN void logv_error(const char *format, va_list ap) YS_ATTRIBUTE(noretur
 void log(const char *format, ...)  YS_ATTRIBUTE(format(printf, 1, 2));
 void log_header(RTLIL::Design *design, const char *format, ...) YS_ATTRIBUTE(format(printf, 2, 3));
 void log_warning(const char *format, ...) YS_ATTRIBUTE(format(printf, 1, 2));
+void log_experimental(const char *format, ...) YS_ATTRIBUTE(format(printf, 1, 2));
 
 // Log with filename to report a problem in a source file.
 void log_file_warning(const std::string &filename, int lineno, const char *format, ...) YS_ATTRIBUTE(format(printf, 3, 4));
+void log_file_info(const std::string &filename, int lineno, const char *format, ...) YS_ATTRIBUTE(format(printf, 3, 4));
 
 void log_warning_noprefix(const char *format, ...) YS_ATTRIBUTE(format(printf, 1, 2));
 YS_NORETURN void log_error(const char *format, ...) YS_ATTRIBUTE(format(printf, 1, 2), noreturn);
@@ -90,7 +94,7 @@ YS_NORETURN void log_cmd_error(const char *format, ...) YS_ATTRIBUTE(format(prin
 static inline bool ys_debug(int n = 0) { if (log_force_debug) return true; log_debug_suppressed += n; return false; }
 #  define log_debug(...) do { if (ys_debug(1)) log(__VA_ARGS__); } while (0)
 #else
-static inline bool ys_debug(int n = 0) { return false; }
+static inline bool ys_debug(int = 0) { return false; }
 #  define log_debug(_fmt, ...) do { } while (0)
 #endif
 
@@ -132,6 +136,23 @@ void log_pop();
 void log_backtrace(const char *prefix, int levels);
 void log_reset_stack();
 void log_flush();
+
+struct LogExpectedItem
+{
+	LogExpectedItem(std::string pattern, int expected) :
+		expected_count(expected),
+		current_count(0),
+		pattern(pattern)
+	{
+	}
+
+	int expected_count;
+	int current_count;
+	std::string pattern;
+};
+
+extern std::vector<std::pair<std::regex,LogExpectedItem>> log_expect_log, log_expect_warning, log_expect_error;
+void log_check_expected();
 
 const char *log_signal(const RTLIL::SigSpec &sig, bool autoint = true);
 const char *log_const(const RTLIL::Const &value, bool autoint = true);
@@ -291,6 +312,7 @@ static inline void log_dump_val_worker(PerformanceTimer p) { log("%f seconds", p
 static inline void log_dump_args_worker(const char *p YS_ATTRIBUTE(unused)) { log_assert(*p == 0); }
 void log_dump_val_worker(RTLIL::IdString v);
 void log_dump_val_worker(RTLIL::SigSpec v);
+void log_dump_val_worker(RTLIL::State v);
 
 template<typename K, typename T, typename OPS>
 static inline void log_dump_val_worker(dict<K, T, OPS> &v) {
