@@ -48,7 +48,7 @@ void generate(RTLIL::Design *design, const std::vector<std::string> &celltypes, 
 		RTLIL::Cell *cell = i2.second;
 		if (design->has(cell->type))
 			continue;
-		if (cell->type.substr(0, 1) == "$" && cell->type.substr(0, 3) != "$__")
+		if (cell->type.begins_with("$__"))
 			continue;
 		for (auto &pattern : celltypes)
 			if (patmatch(pattern.c_str(), RTLIL::unescape_id(cell->type).c_str()))
@@ -143,7 +143,7 @@ void generate(RTLIL::Design *design, const std::vector<std::string> &celltypes, 
 // Return the "basic" type for an array item.
 std::string basic_cell_type(const std::string celltype, int pos[3] = nullptr) {
 	std::string basicType = celltype;
-	if (celltype.substr(0, 7) == "$array:") {
+	if (celltype.compare(0, strlen("$array:"), "$array:") == 0) {
 		int pos_idx = celltype.find_first_of(':');
 		int pos_num = celltype.find_first_of(':', pos_idx + 1);
 		int pos_type = celltype.find_first_of(':', pos_num + 1);
@@ -194,16 +194,16 @@ bool expand_module(RTLIL::Design *design, RTLIL::Module *module, bool flag_check
 		std::vector<RTLIL::IdString> connections_to_add_name;
 		std::vector<RTLIL::SigSpec> connections_to_add_signal;
 
-		if (cell->type.substr(0, 7) == "$array:") {
+		if (cell->type.begins_with("$array:")) {
 			int pos[3];
 			basic_cell_type(cell->type.str(), pos);
 			int pos_idx = pos[0];
 			int pos_num = pos[1];
 			int pos_type = pos[2];
-			int idx = atoi(cell->type.str().substr(pos_idx + 1, pos_num).c_str());
-			int num = atoi(cell->type.str().substr(pos_num + 1, pos_type).c_str());
+			int idx = atoi(cell->type.substr(pos_idx + 1, pos_num).c_str());
+			int num = atoi(cell->type.substr(pos_num + 1, pos_type).c_str());
 			array_cells[cell] = std::pair<int, int>(idx, num);
-			cell->type = cell->type.str().substr(pos_type + 1);
+			cell->type = cell->type.substr(pos_type + 1);
 		}
 		dict<RTLIL::IdString, RTLIL::Module*> interfaces_to_add_to_submodule;
 		dict<RTLIL::IdString, RTLIL::IdString> modports_used_in_submodule;
@@ -422,7 +422,7 @@ bool expand_module(RTLIL::Design *design, RTLIL::Module *module, bool flag_check
 		for (auto &conn : cell->connections_) {
 			int conn_size = conn.second.size();
 			RTLIL::IdString portname = conn.first;
-			if (portname.substr(0, 1) == "$") {
+			if (portname.begins_with("$")) {
 				int port_id = atoi(portname.substr(1).c_str());
 				for (auto &wire_it : mod->wires_)
 					if (wire_it.second->port_id == port_id) {
@@ -457,9 +457,8 @@ void hierarchy_worker(RTLIL::Design *design, std::set<RTLIL::Module*, IdString::
 
 	for (auto cell : mod->cells()) {
 		std::string celltype = cell->type.str();
-		if (celltype.substr(0, 7) == "$array:") {
+		if (celltype.compare(0, strlen("$array:"), "$array:") == 0)
 			celltype = basic_cell_type(celltype);
-		}
 		if (design->module(celltype))
 			hierarchy_worker(design, used, design->module(celltype), indent+4);
 	}
@@ -521,9 +520,8 @@ int find_top_mod_score(Design *design, Module *module, dict<Module*, int> &db)
 		for (auto cell : module->cells()) {
 			std::string celltype = cell->type.str();
 			// Is this an array instance
-			if (celltype.substr(0, 7) == "$array:") {
+			if (celltype.compare(0, strlen("$array:"), "$array:") == 0)
 				celltype = basic_cell_type(celltype);
-			}
 			// Is this cell a module instance?
 			auto instModule = design->module(celltype);
 			// If there is no instance for this, issue a warning.
@@ -550,6 +548,19 @@ RTLIL::Module *check_if_top_has_changed(Design *design, Module *top_mod)
 	return NULL;
 }
 
+// Find a matching wire for an implicit port connection; traversing generate block scope
+RTLIL::Wire *find_implicit_port_wire(Module *module, Cell *cell, const std::string& port)
+{
+	const std::string &cellname = cell->name.str();
+	size_t idx = cellname.size();
+	while ((idx = cellname.find_last_of('.', idx-1)) != std::string::npos) {
+		Wire *found = module->wire(cellname.substr(0, idx+1) + port.substr(1));
+		if (found != nullptr)
+			return found;
+	}
+	return module->wire(port);
+}
+
 struct HierarchyPass : public Pass {
 	HierarchyPass() : Pass("hierarchy", "check, expand and clean up design hierarchy") { }
 	void help() YS_OVERRIDE
@@ -562,7 +573,8 @@ struct HierarchyPass : public Pass {
 		log("In parametric designs, a module might exists in several variations with\n");
 		log("different parameter values. This pass looks at all modules in the current\n");
 		log("design an re-runs the language frontends for the parametric modules as\n");
-		log("needed.\n");
+		log("needed. It also resolves assignments to wired logic data types (wand/wor),\n");
+		log("resolves positional module parameters, unroll array instances, and more.\n");
 		log("\n");
 		log("    -check\n");
 		log("        also check the design hierarchy. this generates an error when\n");
@@ -589,6 +601,9 @@ struct HierarchyPass : public Pass {
 		log("        per default this pass adjusts the port width on cells that are\n");
 		log("        module instances when the width does not match the module port. This\n");
 		log("        option disables this behavior.\n");
+		log("\n");
+		log("    -nodefaults\n");
+		log("        do not resolve input port default values\n");
 		log("\n");
 		log("    -nokeep_asserts\n");
 		log("        per default this pass sets the \"keep\" attribute on all modules\n");
@@ -644,6 +659,7 @@ struct HierarchyPass : public Pass {
 		bool generate_mode = false;
 		bool keep_positionals = false;
 		bool keep_portwidths = false;
+		bool nodefaults = false;
 		bool nokeep_asserts = false;
 		std::vector<std::string> generate_cells;
 		std::vector<generate_port_decl_t> generate_ports;
@@ -709,6 +725,10 @@ struct HierarchyPass : public Pass {
 			}
 			if (args[argidx] == "-keep_portwidths") {
 				keep_portwidths = true;
+				continue;
+			}
+			if (args[argidx] == "-nodefaults") {
+				nodefaults = true;
 				continue;
 			}
 			if (args[argidx] == "-nokeep_asserts") {
@@ -800,6 +820,30 @@ struct HierarchyPass : public Pass {
 			for (auto &mod_it : design->modules_)
 				if (mod_it.second->get_bool_attribute("\\top"))
 					top_mod = mod_it.second;
+
+		if (top_mod != nullptr && top_mod->name.begins_with("$abstract")) {
+			IdString top_name = top_mod->name.substr(strlen("$abstract"));
+
+			dict<RTLIL::IdString, RTLIL::Const> top_parameters;
+			for (auto &para : parameters) {
+				SigSpec sig_value;
+				if (!RTLIL::SigSpec::parse(sig_value, NULL, para.second))
+					log_cmd_error("Can't decode value '%s'!\n", para.second.c_str());
+				top_parameters[RTLIL::escape_id(para.first)] = sig_value.as_const();
+			}
+
+			top_mod = design->module(top_mod->derive(design, top_parameters));
+
+			if (top_mod != nullptr && top_mod->name != top_name) {
+				Module *m = top_mod->clone();
+				m->name = top_name;
+				Module *old_mod = design->module(top_name);
+				if (old_mod)
+					design->remove(old_mod);
+				design->add(m);
+				top_mod = m;
+			}
+		}
 
 		if (top_mod == nullptr && auto_top_mode) {
 			log_header(design, "Finding top of design hierarchy..\n");
@@ -939,66 +983,265 @@ struct HierarchyPass : public Pass {
 			}
 		}
 
+		// Determine default values
+		dict<IdString, dict<IdString, Const>> defaults_db;
+		if (!nodefaults)
+		{
+			for (auto module : design->modules())
+				for (auto wire : module->wires())
+					if (wire->port_input && wire->attributes.count("\\defaultvalue"))
+						defaults_db[module->name][wire->name] = wire->attributes.at("\\defaultvalue");
+		}
+		// Process SV implicit wildcard port connections
 		std::set<Module*> blackbox_derivatives;
 		std::vector<Module*> design_modules = design->modules();
 
 		for (auto module : design_modules)
-		for (auto cell : module->cells())
 		{
-			Module *m = design->module(cell->type);
-
-			if (m == nullptr)
-				continue;
-
-			if (m->get_blackbox_attribute() && !cell->parameters.empty() && m->get_bool_attribute("\\dynports")) {
-				IdString new_m_name = m->derive(design, cell->parameters, true);
-				if (new_m_name.empty())
+			for (auto cell : module->cells())
+			{
+				if (!cell->get_bool_attribute(ID(wildcard_port_conns)))
 					continue;
-				if (new_m_name != m->name) {
-					m = design->module(new_m_name);
-					blackbox_derivatives.insert(m);
+				Module *m = design->module(cell->type);
+
+				if (m == nullptr)
+					log_error("Cell %s.%s (%s) has implicit port connections but the module it instantiates is unknown.\n",
+							RTLIL::id2cstr(module->name), RTLIL::id2cstr(cell->name), RTLIL::id2cstr(cell->type));
+
+				// Need accurate port widths for error checking; so must derive blackboxes with dynamic port widths
+				if (m->get_blackbox_attribute() && !cell->parameters.empty() && m->get_bool_attribute("\\dynports")) {
+					IdString new_m_name = m->derive(design, cell->parameters, true);
+					if (new_m_name.empty())
+						continue;
+					if (new_m_name != m->name) {
+						m = design->module(new_m_name);
+						blackbox_derivatives.insert(m);
+					}
+				}
+
+				auto old_connections = cell->connections();
+				for (auto wire : m->wires()) {
+					// Find ports of the module that aren't explicitly connected
+					if (!wire->port_input && !wire->port_output)
+						continue;
+					if (old_connections.count(wire->name))
+						continue;
+					// Make sure a wire of correct name exists in the parent
+					Wire* parent_wire = find_implicit_port_wire(module, cell, wire->name.str());
+
+					// Missing wires are OK when a default value is set
+					if (!nodefaults && parent_wire == nullptr && defaults_db.count(cell->type) && defaults_db.at(cell->type).count(wire->name))
+						continue;
+
+					if (parent_wire == nullptr)
+						log_error("No matching wire for implicit port connection `%s' of cell %s.%s (%s).\n",
+								RTLIL::id2cstr(wire->name), RTLIL::id2cstr(module->name), RTLIL::id2cstr(cell->name), RTLIL::id2cstr(cell->type));
+					if (parent_wire->width != wire->width)
+						log_error("Width mismatch between wire (%d bits) and port (%d bits) for implicit port connection `%s' of cell %s.%s (%s).\n",
+								parent_wire->width, wire->width,
+								RTLIL::id2cstr(wire->name), RTLIL::id2cstr(module->name), RTLIL::id2cstr(cell->name), RTLIL::id2cstr(cell->type));
+					cell->setPort(wire->name, parent_wire);
+				}
+				cell->attributes.erase(ID(wildcard_port_conns));
+			}
+		}
+
+		if (!nodefaults)
+		{
+			for (auto module : design->modules())
+				for (auto cell : module->cells())
+				{
+					if (defaults_db.count(cell->type) == 0)
+						continue;
+
+					if (keep_positionals) {
+						bool found_positionals = false;
+						for (auto &conn : cell->connections())
+							if (conn.first[0] == '$' && '0' <= conn.first[1] && conn.first[1] <= '9')
+								found_positionals = true;
+						if (found_positionals)
+							continue;
+					}
+
+					for (auto &it : defaults_db.at(cell->type))
+						if (!cell->hasPort(it.first))
+							cell->setPort(it.first, it.second);
+				}
+		}
+
+		for (auto module : design_modules)
+		{
+			pool<Wire*> wand_wor_index;
+			dict<Wire*, SigSpec> wand_map, wor_map;
+			vector<SigSig> new_connections;
+
+			for (auto wire : module->wires())
+			{
+				if (wire->get_bool_attribute("\\wand")) {
+					wand_map[wire] = SigSpec();
+					wand_wor_index.insert(wire);
+				}
+				if (wire->get_bool_attribute("\\wor")) {
+					wor_map[wire] = SigSpec();
+					wand_wor_index.insert(wire);
 				}
 			}
 
-			for (auto &conn : cell->connections())
+			for (auto &conn : module->connections())
 			{
-				Wire *w = m->wire(conn.first);
+				SigSig new_conn;
+				int cursor = 0;
 
-				if (w == nullptr || w->port_id == 0)
-					continue;
-
-				if (GetSize(conn.second) == 0)
-					continue;
-
-				SigSpec sig = conn.second;
-
-				if (!keep_portwidths && GetSize(w) != GetSize(conn.second))
+				for (auto c : conn.first.chunks())
 				{
-					if (GetSize(w) < GetSize(conn.second))
-					{
-						int n = GetSize(conn.second) - GetSize(w);
-						if (!w->port_input && w->port_output)
-							module->connect(sig.extract(GetSize(w), n), Const(0, n));
-						sig.remove(GetSize(w), n);
+					Wire *w = c.wire;
+					SigSpec rhs = conn.second.extract(cursor, GetSize(c));
+
+					if (wand_wor_index.count(w) == 0) {
+						new_conn.first.append(c);
+						new_conn.second.append(rhs);
+					} else {
+						if (wand_map.count(w)) {
+							SigSpec sig = SigSpec(State::S1, GetSize(w));
+							sig.replace(c.offset, rhs);
+							wand_map.at(w).append(sig);
+						} else {
+							SigSpec sig = SigSpec(State::S0, GetSize(w));
+							sig.replace(c.offset, rhs);
+							wor_map.at(w).append(sig);
+						}
 					}
-					else
+					cursor += GetSize(c);
+				}
+				new_connections.push_back(new_conn);
+			}
+			module->new_connections(new_connections);
+
+			for (auto cell : module->cells())
+			{
+				if (!cell->known())
+					continue;
+
+				for (auto &conn : cell->connections())
+				{
+					if (!cell->output(conn.first))
+						continue;
+
+					SigSpec new_sig;
+					bool update_port = false;
+
+					for (auto c : conn.second.chunks())
 					{
-						int n = GetSize(w) - GetSize(conn.second);
-						if (w->port_input && !w->port_output)
-							sig.append(Const(0, n));
-						else
-							sig.append(module->addWire(NEW_ID, n));
+						Wire *w = c.wire;
+
+						if (wand_wor_index.count(w) == 0) {
+							new_sig.append(c);
+							continue;
+						}
+
+						Wire *t = module->addWire(NEW_ID, GetSize(c));
+						new_sig.append(t);
+						update_port = true;
+
+						if (wand_map.count(w)) {
+							SigSpec sig = SigSpec(State::S1, GetSize(w));
+							sig.replace(c.offset, t);
+							wand_map.at(w).append(sig);
+						} else {
+							SigSpec sig = SigSpec(State::S0, GetSize(w));
+							sig.replace(c.offset, t);
+							wor_map.at(w).append(sig);
+						}
 					}
 
-					if (!conn.second.is_fully_const() || !w->port_input || w->port_output)
-						log_warning("Resizing cell port %s.%s.%s from %d bits to %d bits.\n", log_id(module), log_id(cell),
-								log_id(conn.first), GetSize(conn.second), GetSize(sig));
-					cell->setPort(conn.first, sig);
+					if (update_port)
+						cell->setPort(conn.first, new_sig);
+				}
+			}
+
+			for (auto w : wand_wor_index)
+			{
+				bool wand = wand_map.count(w);
+				SigSpec sigs = wand ? wand_map.at(w) : wor_map.at(w);
+
+				if (GetSize(sigs) == 0)
+					continue;
+
+				if (GetSize(w) == 1) {
+					if (wand)
+						module->addReduceAnd(NEW_ID, sigs, w);
+					else
+						module->addReduceOr(NEW_ID, sigs, w);
+					continue;
 				}
 
-				if (w->port_output && !w->port_input && sig.has_const())
-					log_error("Output port %s.%s.%s (%s) is connected to constants: %s\n",
-							log_id(module), log_id(cell), log_id(conn.first), log_id(cell->type), log_signal(sig));
+				SigSpec s = sigs.extract(0, GetSize(w));
+				for (int i = GetSize(w); i < GetSize(sigs); i += GetSize(w)) {
+					if (wand)
+						s = module->And(NEW_ID, s, sigs.extract(i, GetSize(w)));
+					else
+						s = module->Or(NEW_ID, s, sigs.extract(i, GetSize(w)));
+				}
+				module->connect(w, s);
+			}
+
+			for (auto cell : module->cells())
+			{
+				Module *m = design->module(cell->type);
+
+				if (m == nullptr)
+					continue;
+
+				if (m->get_blackbox_attribute() && !cell->parameters.empty() && m->get_bool_attribute("\\dynports")) {
+					IdString new_m_name = m->derive(design, cell->parameters, true);
+					if (new_m_name.empty())
+						continue;
+					if (new_m_name != m->name) {
+						m = design->module(new_m_name);
+						blackbox_derivatives.insert(m);
+					}
+				}
+
+				for (auto &conn : cell->connections())
+				{
+					Wire *w = m->wire(conn.first);
+
+					if (w == nullptr || w->port_id == 0)
+						continue;
+
+					if (GetSize(conn.second) == 0)
+						continue;
+
+					SigSpec sig = conn.second;
+
+					if (!keep_portwidths && GetSize(w) != GetSize(conn.second))
+					{
+						if (GetSize(w) < GetSize(conn.second))
+						{
+							int n = GetSize(conn.second) - GetSize(w);
+							if (!w->port_input && w->port_output)
+								module->connect(sig.extract(GetSize(w), n), Const(0, n));
+							sig.remove(GetSize(w), n);
+						}
+						else
+						{
+							int n = GetSize(w) - GetSize(conn.second);
+							if (w->port_input && !w->port_output)
+								sig.append(Const(0, n));
+							else
+								sig.append(module->addWire(NEW_ID, n));
+						}
+
+						if (!conn.second.is_fully_const() || !w->port_input || w->port_output)
+							log_warning("Resizing cell port %s.%s.%s from %d bits to %d bits.\n", log_id(module), log_id(cell),
+									log_id(conn.first), GetSize(conn.second), GetSize(sig));
+						cell->setPort(conn.first, sig);
+					}
+
+					if (w->port_output && !w->port_input && sig.has_const())
+						log_error("Output port %s.%s.%s (%s) is connected to constants: %s\n",
+								log_id(module), log_id(cell), log_id(conn.first), log_id(cell->type), log_signal(sig));
+				}
 			}
 		}
 

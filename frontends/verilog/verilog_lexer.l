@@ -28,7 +28,7 @@
  *
  *  A simple lexer for Verilog code. Non-preprocessor compiler directives are
  *  handled here. The preprocessor stuff is handled in preproc.cc. Everything
- *  else is left to the bison parser (see parser.y).
+ *  else is left to the bison parser (see verilog_parser.y).
  *
  */
 
@@ -55,26 +55,57 @@ namespace VERILOG_FRONTEND {
 }
 YOSYS_NAMESPACE_END
 
+#define YYSTYPE FRONTEND_VERILOG_YYSTYPE
+#define YYLTYPE FRONTEND_VERILOG_YYLTYPE
+
 #define SV_KEYWORD(_tok) \
 	if (sv_mode) return _tok; \
 	log("Lexer warning: The SystemVerilog keyword `%s' (at %s:%d) is not "\
 			"recognized unless read_verilog is called with -sv!\n", yytext, \
 			AST::current_filename.c_str(), frontend_verilog_yyget_lineno()); \
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext); \
+	yylval->string = new std::string(std::string("\\") + yytext); \
 	return TOK_ID;
 
 #define NON_KEYWORD() \
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext); \
+	yylval->string = new std::string(std::string("\\") + yytext); \
 	return TOK_ID;
 
 #define YY_INPUT(buf,result,max_size) \
 	result = readsome(*VERILOG_FRONTEND::lexin, buf, max_size)
 
+YYLTYPE real_location;
+YYLTYPE old_location;
+
+#define YY_USER_ACTION \
+       old_location = real_location; \
+       real_location.first_line = real_location.last_line; \
+       real_location.first_column = real_location.last_column; \
+       for(int i = 0; yytext[i] != '\0'; ++i){ \
+               if(yytext[i] == '\n') { \
+                       real_location.last_line++; \
+                       real_location.last_column = 1; \
+               } \
+               else { \
+                       real_location.last_column++; \
+               } \
+       } \
+    (*yylloc) = real_location;
+
+#define YY_BREAK \
+    (*yylloc) = old_location; \
+    break;
+
+#undef YY_BUF_SIZE
+#define YY_BUF_SIZE 65536
+
+extern int frontend_verilog_yylex(YYSTYPE *yylval_param, YYLTYPE *yyloc_param);
 %}
 
 %option yylineno
 %option noyywrap
 %option nounput
+%option bison-locations
+%option bison-bridge
 %option prefix="frontend_verilog_yy"
 
 %x COMMENT
@@ -94,12 +125,16 @@ YOSYS_NAMESPACE_END
 	if (!current_filename.empty() && current_filename.back() == '"')
 		current_filename = current_filename.substr(0, current_filename.size()-1);
 	frontend_verilog_yyset_lineno(0);
+	yylloc->first_line = yylloc->last_line = 0;
+	real_location.first_line = real_location.last_line = 0;
 }
 
 <INITIAL,SYNOPSYS_TRANSLATE_OFF>"`file_pop"[^\n]*\n {
 	current_filename = fn_stack.back();
 	fn_stack.pop_back();
 	frontend_verilog_yyset_lineno(ln_stack.back());
+	yylloc->first_line = yylloc->last_line = ln_stack.back();
+	real_location.first_line = real_location.last_line = ln_stack.back();
 	ln_stack.pop_back();
 }
 
@@ -107,6 +142,8 @@ YOSYS_NAMESPACE_END
 	char *p = yytext + 5;
 	while (*p == ' ' || *p == '\t') p++;
 	frontend_verilog_yyset_lineno(atoi(p));
+	yylloc->first_line = yylloc->last_line = atoi(p);
+	real_location.first_line = real_location.last_line = atoi(p);
 	while (*p && *p != ' ' && *p != '\t') p++;
 	while (*p == ' ' || *p == '\t') p++;
 	char *q = *p ? p + 1 : p;
@@ -185,15 +222,17 @@ YOSYS_NAMESPACE_END
 "unique0"      { SV_KEYWORD(TOK_UNIQUE); }
 "priority"     { SV_KEYWORD(TOK_PRIORITY); }
 
-"always_comb"  { SV_KEYWORD(TOK_ALWAYS); }
-"always_ff"    { SV_KEYWORD(TOK_ALWAYS); }
-"always_latch" { SV_KEYWORD(TOK_ALWAYS); }
+"always_comb"  { SV_KEYWORD(TOK_ALWAYS_COMB); }
+"always_ff"    { SV_KEYWORD(TOK_ALWAYS_FF); }
+"always_latch" { SV_KEYWORD(TOK_ALWAYS_LATCH); }
 
  /* use special token for labels on assert, assume, cover, and restrict because it's insanley complex
     to fix parsing of cells otherwise. (the current cell parser forces a reduce very early to update some
     global state.. its a mess) */
 [a-zA-Z_$][a-zA-Z0-9_$]*/[ \t\r\n]*:[ \t\r\n]*(assert|assume|cover|restrict)[^a-zA-Z0-9_$\.] {
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
+	if (!strcmp(yytext, "default"))
+		return TOK_DEFAULT;
+	yylval->string = new std::string(std::string("\\") + yytext);
 	return TOK_SVA_LABEL;
 }
 
@@ -218,6 +257,8 @@ YOSYS_NAMESPACE_END
 "output"  { return TOK_OUTPUT; }
 "inout"   { return TOK_INOUT; }
 "wire"    { return TOK_WIRE; }
+"wor"     { return TOK_WOR; }
+"wand"    { return TOK_WAND; }
 "reg"     { return TOK_REG; }
 "integer" { return TOK_INTEGER; }
 "signed"  { return TOK_SIGNED; }
@@ -228,27 +269,27 @@ YOSYS_NAMESPACE_END
 "typedef" { SV_KEYWORD(TOK_TYPEDEF); }
 
 [0-9][0-9_]* {
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_CONSTVAL;
 }
 
-[0-9]*[ \t]*\'s?[bodhBODH]*[ \t\r\n]*[0-9a-fA-FzxZX?_]+ {
-	frontend_verilog_yylval.string = new std::string(yytext);
+[0-9]*[ \t]*\'[sS]?[bodhBODH]?[ \t\r\n]*[0-9a-fA-FzxZX?_]+ {
+	yylval->string = new std::string(yytext);
 	return TOK_CONSTVAL;
 }
 
 [0-9][0-9_]*\.[0-9][0-9_]*([eE][-+]?[0-9_]+)? {
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_REALVAL;
 }
 
 [0-9][0-9_]*[eE][-+]?[0-9_]+ {
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_REALVAL;
 }
 
 \"		{ BEGIN(STRING); }
-<STRING>\\.	{ yymore(); }
+<STRING>\\.	{ yymore(); real_location = old_location; }
 <STRING>\"	{
 	BEGIN(0);
 	char *yystr = strdup(yytext);
@@ -284,14 +325,14 @@ YOSYS_NAMESPACE_END
 		yystr[j++] = yystr[i++];
 	}
 	yystr[j] = 0;
-	frontend_verilog_yylval.string = new std::string(yystr, j);
+	yylval->string = new std::string(yystr, j);
 	free(yystr);
 	return TOK_STRING;
 }
-<STRING>.	{ yymore(); }
+<STRING>.	{ yymore(); real_location = old_location; }
 
 and|nand|or|nor|xor|xnor|not|buf|bufif0|bufif1|notif0|notif1 {
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_PRIMITIVE;
 }
 
@@ -299,26 +340,31 @@ supply0 { return TOK_SUPPLY0; }
 supply1 { return TOK_SUPPLY1; }
 
 "$"(display|write|strobe|monitor|time|stop|finish|dumpfile|dumpvars|dumpon|dumpoff|dumpall) {
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_ID;
 }
 
 "$"(setup|hold|setuphold|removal|recovery|recrem|skew|timeskew|fullskew|nochange) {
 	if (!specify_mode) REJECT;
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_ID;
+}
+
+"$"(info|warning|error|fatal) {
+	yylval->string = new std::string(yytext);
+	return TOK_MSG_TASKS;
 }
 
 "$signed"   { return TOK_TO_SIGNED; }
 "$unsigned" { return TOK_TO_UNSIGNED; }
 
 [a-zA-Z_$][a-zA-Z0-9_$]* {
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
+	yylval->string = new std::string(std::string("\\") + yytext);
 	return TOK_ID;
 }
 
 [a-zA-Z_$][a-zA-Z0-9_$\.]* {
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
+	yylval->string = new std::string(std::string("\\") + yytext);
 	return TOK_ID;
 }
 
@@ -365,7 +411,7 @@ import[ \t\r\n]+\"(DPI|DPI-C)\"[ \t\r\n]+function[ \t\r\n]+ {
 }
 
 <IMPORT_DPI>[a-zA-Z_$][a-zA-Z0-9_$]* {
-	frontend_verilog_yylval.string = new std::string(std::string("\\") + yytext);
+	yylval->string = new std::string(std::string("\\") + yytext);
 	return TOK_ID;
 }
 
@@ -381,7 +427,7 @@ import[ \t\r\n]+\"(DPI|DPI-C)\"[ \t\r\n]+function[ \t\r\n]+ {
 }
 
 "\\"[^ \t\r\n]+ {
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_ID;
 }
 
@@ -419,14 +465,16 @@ import[ \t\r\n]+\"(DPI|DPI-C)\"[ \t\r\n]+function[ \t\r\n]+ {
 "+:" { return TOK_POS_INDEXED; }
 "-:" { return TOK_NEG_INDEXED; }
 
+".*" { return TOK_WILDCARD_CONNECT; }
+
 [-+]?[=*]> {
 	if (!specify_mode) REJECT;
-	frontend_verilog_yylval.string = new std::string(yytext);
+	yylval->string = new std::string(yytext);
 	return TOK_SPECIFY_OPER;
 }
 
 "&&&" {
-	if (!specify_mode) REJECT;
+	if (!specify_mode) return TOK_IGNORED_SPECIFY_AND;
 	return TOK_SPECIFY_AND;
 }
 
