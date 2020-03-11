@@ -128,7 +128,7 @@ bumpversion:
 # is just a symlink to your actual ABC working directory, as 'make mrproper'
 # will remove the 'abc' directory and you do not want to accidentally
 # delete your work on ABC..
-ABCREV = 1f0f156
+ABCREV = ff6758a
 ABCPULL = 1
 ABCURL ?= https://github.com/The-OpenROAD-Project/abc.git
 ABCMKARGS = CC="$(CXX)" CXX="$(CXX)" ABC_USE_LIBSTDCXX=1
