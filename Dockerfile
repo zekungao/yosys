@@ -28,3 +28,23 @@ WORKDIR /yosys
 RUN make PREFIX=/build config-gcc-static-tcl-dynamic
 RUN make PREFIX=/build -j$(nproc)
 RUN make PREFIX=/build install
+
+# DRiLLS
+RUN cd abc && make ABC_USE_PIC=1 libabc.a
+RUN wget https://cmake.org/files/v3.14/cmake-3.14.0-Linux-x86_64.sh && \
+    chmod +x cmake-3.14.0-Linux-x86_64.sh  && \
+    ./cmake-3.14.0-Linux-x86_64.sh --skip-license --prefix=/usr/local && rm -rf cmake-3.14.0-Linux-x86_64.sh \
+    && yum clean -y all
+RUN yum install -y swig
+RUN yum install -y https://centos7.iuscommunity.org/ius-release.rpm && \
+    yum update -y && \
+    yum install -y python36u python36u-libs python36u-devel python36u-pip
+RUN cd / && git clone https://github.com/scale-lab/gDRiLLS.git && \
+    cp /yosys/abc/libabc.a /gDRiLLS/session/libs && \
+    cd /gDRiLLS/session && \
+    mkdir build && cd build && \
+    cmake .. && \
+    make && \
+    python setup.py install && \
+    cd /gDRiLLS && pip install -r requirements.txt
+ENV PATH=/gDRiLLS:$PATH
