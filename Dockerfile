@@ -13,7 +13,6 @@ ENV CC=/opt/rh/devtoolset-7/root/usr/bin/gcc \
 RUN yum -y install rh-python36
 ENV PATH=/opt/rh/rh-python36/root/usr/bin:$PATH
 
-
 # install other yosys dependencies
 RUN yum install -y flex tcl tcl-devel libffi-devel git graphviz readline-devel glibc-static wget autoconf zlib-devel && \
     wget https://ftp.gnu.org/gnu/bison/bison-3.0.1.tar.gz && \
@@ -30,21 +29,19 @@ RUN make PREFIX=/build -j$(nproc)
 RUN make PREFIX=/build install
 
 # DRiLLS
-RUN cd abc && make ABC_USE_PIC=1 libabc.a
+FROM builder AS drills
 RUN wget https://cmake.org/files/v3.14/cmake-3.14.0-Linux-x86_64.sh && \
     chmod +x cmake-3.14.0-Linux-x86_64.sh  && \
     ./cmake-3.14.0-Linux-x86_64.sh --skip-license --prefix=/usr/local && rm -rf cmake-3.14.0-Linux-x86_64.sh \
     && yum clean -y all
-RUN yum install -y swig
-RUN yum install -y https://centos7.iuscommunity.org/ius-release.rpm && \
-    yum update -y && \
-    yum install -y python36u python36u-libs python36u-devel python36u-pip
+RUN yum install -y swig python36u-libs python36u-devel python36u-pip python-devel
 RUN cd / && git clone https://github.com/scale-lab/gDRiLLS.git && \
-    cp /yosys/abc/libabc.a /gDRiLLS/session/libs && \
-    cd /gDRiLLS/session && \
-    mkdir build && cd build && \
-    cmake .. && \
-    make && \
-    python setup.py install && \
     cd /gDRiLLS && pip install -r requirements.txt
+RUN cd /yosys/abc && make clean && make ABC_USE_PIC=1 ABC_USE_NO_READLINE=1 ABC_USE_NO_PTHREADS=1 libabc.a -j$(nproc) && \
+    mv /yosys/abc/libabc.a /gDRiLLS/session/libs
+RUN cd /gDRiLLS/session && \
+    mkdir build && cd build && \
+    cmake -DPYTHON_INCLUDE_DIR=/opt/rh/rh-python36/root/usr/include/python3.6m -DPYTHON_LIBRARY=/opt/rh/rh-python36/root/usr/lib64/libpython3.6m.so .. && \
+    make && \
+    python setup.py install
 ENV PATH=/gDRiLLS:$PATH

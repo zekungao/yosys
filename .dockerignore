@@ -2,6 +2,7 @@ Dockerfile
 .github
 .travis
 .dockerignore
+.git
 
 # from .gitignore file
 *.o
