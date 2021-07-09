@@ -16,7 +16,7 @@ ENABLE_GLOB := 1
 ENABLE_PLUGINS := 1
 ENABLE_READLINE := 1
 ENABLE_EDITLINE := 0
-ENABLE_VERIFIC := 0
+ENABLE_VERIFIC := 1
 ENABLE_COVER := 1
 ENABLE_LIBYOSYS := 0
 ENABLE_PROTOBUF := 0
@@ -28,7 +28,7 @@ ENABLE_PYOSYS := 0
 # other configuration flags
 ENABLE_GCOV := 0
 ENABLE_GPROF := 0
-ENABLE_DEBUG := 0
+ENABLE_DEBUG := 1
 ENABLE_NDEBUG := 0
 ENABLE_CCACHE := 0
 LINK_CURSES := 0
@@ -510,8 +510,8 @@ endif
 endif
 
 ifeq ($(ENABLE_VERIFIC),1)
-VERIFIC_DIR ?= /usr/local/src/verific_lib
-VERIFIC_COMPONENTS ?= verilog vhdl database util containers hier_tree
+VERIFIC_DIR ?= /home/andy/icbench/maple/verific
+VERIFIC_COMPONENTS ?= verilog  database util containers commands verilog_nl 
 CXXFLAGS += $(patsubst %,-I$(VERIFIC_DIR)/%,$(VERIFIC_COMPONENTS)) -DYOSYS_ENABLE_VERIFIC
 ifeq ($(OS), Darwin)
 LDLIBS += $(patsubst %,$(VERIFIC_DIR)/%/*-mac.a,$(VERIFIC_COMPONENTS)) -lz
