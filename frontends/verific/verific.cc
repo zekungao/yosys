@@ -43,21 +43,12 @@ USING_YOSYS_NAMESPACE
 #endif
 
 #include "veri_file.h"
-#include "vhdl_file.h"
-#include "hier_tree.h"
+//#include "hier_tree.h"
 #include "VeriModule.h"
 #include "VeriWrite.h"
-#include "VhdlUnits.h"
 #include "VeriLibrary.h"
-#include "VeriExtensions.h"
+//#include "VeriExtensions.h"
 
-#ifndef SYMBIOTIC_VERIFIC_API_VERSION
-#  error "Only Symbiotic EDA flavored Verific is supported. Please contact office@symbioticeda.com for commercial support for Yosys+Verific."
-#endif
-
-#if SYMBIOTIC_VERIFIC_API_VERSION < 20201001
-#  error "Please update your version of Symbiotic EDA flavored Verific."
-#endif
 
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -114,7 +105,11 @@ string get_full_netlist_name(Netlist *nl)
 
 // ==================================================================
 
-VerificImporter::VerificImporter(bool mode_gates, bool mode_keep, bool mode_nosva, bool mode_names, bool mode_verific, bool mode_autocover, bool mode_fullinit) :
+VerificImporter::VerificImporter(bool mode_gates,
+				 bool mode_keep,
+				 bool mode_nosva, bool mode_names,
+				 bool mode_verific, bool mode_autocover,
+				 bool mode_fullinit) :
 		mode_gates(mode_gates), mode_keep(mode_keep), mode_nosva(mode_nosva),
 		mode_names(mode_names), mode_verific(mode_verific), mode_autocover(mode_autocover),
 		mode_fullinit(mode_fullinit)
@@ -129,6 +124,7 @@ RTLIL::SigBit VerificImporter::net_map_at(Net *net)
 
 	return net_map.at(net);
 }
+
 
 bool is_blackbox(Netlist *nl)
 {
@@ -171,8 +167,6 @@ void VerificImporter::import_attributes(dict<RTLIL::IdString, RTLIL::Const> &att
 		if (!type_range)
 			return;
 		if (!type_range->IsTypeEnum())
-			return;
-		if (nl->IsFromVhdl() && strcmp(type_range->GetTypeName(), "STD_LOGIC") == 0)
 			return;
 		auto type_name = type_range->GetTypeName();
 		if (!type_name)
@@ -1471,16 +1465,6 @@ void VerificImporter::import_netlist(RTLIL::Design *design, Netlist *nl, std::se
 				continue;
 		}
 
-		if (inst->Type() == PRIM_SEDA_INITSTATE)
-		{
-			SigBit initstate = module->Initstate(new_verific_id(inst));
-			SigBit sig_o = net_map_at(inst->GetOutput());
-			module->connect(sig_o, initstate);
-
-			if (!mode_keep)
-				continue;
-		}
-
 		if (!mode_keep && verific_sva_prims.count(inst->Type())) {
 			if (verific_verbose)
 				log("    skipping SVA cell in non k-mode\n");
@@ -1947,25 +1931,23 @@ void verific_import(Design *design, const std::map<std::string,std::string> &par
 
 	std::set<Netlist*> nl_todo, nl_done;
 
-	VhdlLibrary *vhdl_lib = vhdl_file::GetLibrary("work", 1);
+
 	VeriLibrary *veri_lib = veri_file::GetLibrary("work", 1);
 	Array *netlists = NULL;
-	Array veri_libs, vhdl_libs;
-	if (vhdl_lib) vhdl_libs.InsertLast(vhdl_lib);
+	Array veri_libs;
 	if (veri_lib) veri_libs.InsertLast(veri_lib);
 
 	Map verific_params(STRING_HASH);
 	for (const auto &i : parameters)
 		verific_params.Insert(i.first.c_str(), i.second.c_str());
 
-	InitialAssertionRewriter rw;
-	rw.RegisterCallBack();
 
 	if (top.empty()) {
-		netlists = hier_tree::ElaborateAll(&veri_libs, &vhdl_libs, &verific_params);
+	  //TODO: this looks weird
+	  //		netlists = hier_tree::ElaborateAll(&veri_libs, nullptr, &verific_params);
 	}
 	else {
-		Array veri_modules, vhdl_units;
+	  Array veri_modules;
 
 		if (veri_lib) {
 			VeriModule *veri_module = veri_lib->GetModule(top.c_str(), 1);
@@ -1981,13 +1963,8 @@ void verific_import(Design *design, const std::map<std::string,std::string> &par
 			}
 		}
 
-		if (vhdl_lib) {
-			VhdlDesignUnit *vhdl_unit = vhdl_lib->GetPrimUnit(top.c_str());
-			if (vhdl_unit)
-				vhdl_units.InsertLast(vhdl_unit);
-		}
 
-		netlists = hier_tree::Elaborate(&veri_modules, &vhdl_units, &verific_params);
+		netlists = veri_file::ElaborateMultipleTop(&veri_modules,  &verific_params);
 	}
 
 	Netlist *nl;
@@ -2023,7 +2000,7 @@ void verific_import(Design *design, const std::map<std::string,std::string> &par
 	}
 
 	veri_file::Reset();
-	vhdl_file::Reset();
+
 	Libset::Reset();
 	verific_incdirs.clear();
 	verific_libdirs.clear();
@@ -2051,8 +2028,9 @@ bool check_noverific_env()
 #endif
 
 struct VerificPass : public Pass {
-	VerificPass() : Pass("verific", "load Verilog and VHDL designs using Verific") { }
-	void help() override
+	VerificPass() : Pass("verific", "load system verilog") { }
+
+  void help() override
 	{
 		//   |---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|
 		log("\n");
@@ -2068,27 +2046,6 @@ struct VerificPass : public Pass {
 		log("the language version (and before file names) to set additional verilog defines.\n");
 		log("The macros SYNTHESIS and VERIFIC are defined implicitly.\n");
 		log("\n");
-		log("\n");
-		log("    verific -formal <verilog-file>..\n");
-		log("\n");
-		log("Like -sv, but define FORMAL instead of SYNTHESIS.\n");
-		log("\n");
-		log("\n");
-		log("    verific {-vhdl87|-vhdl93|-vhdl2k|-vhdl2008|-vhdl} <vhdl-file>..\n");
-		log("\n");
-		log("Load the specified VHDL files into Verific.\n");
-		log("\n");
-		log("\n");
-		log("    verific [-work <libname>] {-sv|-vhdl|...} <hdl-file>\n");
-		log("\n");
-		log("Load the specified Verilog/SystemVerilog/VHDL file into the specified library.\n");
-		log("(default library when -work is not present: \"work\")\n");
-		log("\n");
-		log("\n");
-		log("    verific [-L <libname>] {-sv|-vhdl|...} <hdl-file>\n");
-		log("\n");
-		log("Look up external definitions in the specified library.\n");
-		log("(-L may be used more than once)\n");
 		log("\n");
 		log("\n");
 		log("    verific -vlog-incdir <directory>..\n");
@@ -2217,64 +2174,17 @@ struct VerificPass : public Pass {
 		log("\n");
 		log("Applications:\n");
 		log("\n");
-#ifdef YOSYS_ENABLE_VERIFIC
-		VerificFormalApplications vfa;
-		log("%s\n",vfa.GetHelp().c_str());
-#else
-		log("  WARNING: Applications only available in commercial build.\n");
-
-#endif
-		log("\n");
-		log("\n");
-		log("    verific -template <name> <top_module>..\n");
-		log("\n");
-		log("Generate template for specified top module of loaded design.\n");
-		log("\n");
-		log("Template options:\n");
-		log("\n");
-		log("  -out\n");
-		log("    Specifies output file for generated template, by default output is stdout\n");
-		log("\n");
-		log("  -chparam name value \n");
-		log("    Generate template using this parameter value. Otherwise default parameter\n");
-		log("    values will be used for templat generate functionality. This option\n");
-		log("    can be specified multiple times to override multiple parameters.\n");
-		log("    String values must be passed in double quotes (\").\n");
-		log("\n");
-		log("Templates:\n");
-		log("\n");
-#ifdef YOSYS_ENABLE_VERIFIC
-		VerificTemplateGenerator vfg;
-		log("%s\n",vfg.GetHelp().c_str());
-#else
-		log("  WARNING: Templates only available in commercial build.\n");
-		log("\n");
-#endif
-		log("Use Symbiotic EDA Suite if you need Yosys+Verifc.\n");
-		log("https://www.symbioticeda.com/seda-suite\n");
-		log("\n");
-		log("Contact office@symbioticeda.com for free evaluation\n");
-		log("binaries of Symbiotic EDA Suite.\n");
 		log("\n");
 	}
+
 #ifdef YOSYS_ENABLE_VERIFIC
 	void execute(std::vector<std::string> args, RTLIL::Design *design) override
 	{
 		static bool set_verific_global_flags = true;
 
-		if (check_noverific_env())
-			log_cmd_error("This version of Yosys is built without Verific support.\n"
-					"\n"
-					"Use Symbiotic EDA Suite if you need Yosys+Verifc.\n"
-					"https://www.symbioticeda.com/seda-suite\n"
-					"\n"
-					"Contact office@symbioticeda.com for free evaluation\n"
-					"binaries of Symbiotic EDA Suite.\n");
+		log_header(design, "ICBench Executing VERIFIC (loading SystemVerilog using Verific).\n");
 
-		log_header(design, "Executing VERIFIC (loading SystemVerilog and VHDL designs using Verific).\n");
-
-		if (set_verific_global_flags)
-		{
+		if (set_verific_global_flags){
 			Message::SetConsoleOutput(0);
 			Message::RegisterCallBackMsg(msg_func);
 
@@ -2285,14 +2195,7 @@ struct VerificPass : public Pass {
 			RuntimeFlags::SetVar("veri_extract_dualport_rams", 0);
 			RuntimeFlags::SetVar("veri_extract_multiport_rams", 1);
 
-			RuntimeFlags::SetVar("vhdl_extract_dualport_rams", 0);
-			RuntimeFlags::SetVar("vhdl_extract_multiport_rams", 1);
-
-			RuntimeFlags::SetVar("vhdl_support_variable_slice", 1);
-			RuntimeFlags::SetVar("vhdl_ignore_assertion_statements", 0);
-
 			RuntimeFlags::SetVar("veri_preserve_assignments", 1);
-			RuntimeFlags::SetVar("vhdl_preserve_assignments", 1);
 
 			RuntimeFlags::SetVar("veri_preserve_comments",1);
 			//RuntimeFlags::SetVar("vhdl_preserve_comments",1);
@@ -2309,7 +2212,6 @@ struct VerificPass : public Pass {
 #ifndef DB_PRESERVE_INITIAL_VALUE
 #  warning Verific was built without DB_PRESERVE_INITIAL_VALUE.
 #endif
-
 			set_verific_global_flags = false;
 		}
 
@@ -2458,261 +2360,7 @@ struct VerificPass : public Pass {
 			goto check_error;
 		}
 
-		if (GetSize(args) > argidx && args[argidx] == "-vhdl87") {
-			vhdl_file::SetDefaultLibraryPath((proc_share_dirname() + "verific/vhdl_vdbs_1987").c_str());
-			for (argidx++; argidx < GetSize(args); argidx++)
-				if (!vhdl_file::Analyze(args[argidx].c_str(), work.c_str(), vhdl_file::VHDL_87))
-					log_cmd_error("Reading `%s' in VHDL_87 mode failed.\n", args[argidx].c_str());
-			verific_import_pending = true;
-			goto check_error;
-		}
 
-		if (GetSize(args) > argidx && args[argidx] == "-vhdl93") {
-			vhdl_file::SetDefaultLibraryPath((proc_share_dirname() + "verific/vhdl_vdbs_1993").c_str());
-			for (argidx++; argidx < GetSize(args); argidx++)
-				if (!vhdl_file::Analyze(args[argidx].c_str(), work.c_str(), vhdl_file::VHDL_93))
-					log_cmd_error("Reading `%s' in VHDL_93 mode failed.\n", args[argidx].c_str());
-			verific_import_pending = true;
-			goto check_error;
-		}
-
-		if (GetSize(args) > argidx && args[argidx] == "-vhdl2k") {
-			vhdl_file::SetDefaultLibraryPath((proc_share_dirname() + "verific/vhdl_vdbs_1993").c_str());
-			for (argidx++; argidx < GetSize(args); argidx++)
-				if (!vhdl_file::Analyze(args[argidx].c_str(), work.c_str(), vhdl_file::VHDL_2K))
-					log_cmd_error("Reading `%s' in VHDL_2K mode failed.\n", args[argidx].c_str());
-			verific_import_pending = true;
-			goto check_error;
-		}
-
-		if (GetSize(args) > argidx && (args[argidx] == "-vhdl2008" || args[argidx] == "-vhdl")) {
-			vhdl_file::SetDefaultLibraryPath((proc_share_dirname() + "verific/vhdl_vdbs_2008").c_str());
-			for (argidx++; argidx < GetSize(args); argidx++)
-				if (!vhdl_file::Analyze(args[argidx].c_str(), work.c_str(), vhdl_file::VHDL_2008))
-					log_cmd_error("Reading `%s' in VHDL_2008 mode failed.\n", args[argidx].c_str());
-			verific_import_pending = true;
-			goto check_error;
-		}
-
-		if (argidx < GetSize(args) && args[argidx] == "-app")
-		{
-			if (!(argidx+1 < GetSize(args)))
-				cmd_error(args, argidx, "No formal application specified.\n");
-
-			VerificFormalApplications vfa;
-			auto apps = vfa.GetApps();
-			std::string app = args[++argidx];
-			std::vector<std::string> blacklists;
-			if (apps.find(app) == apps.end())
-				log_cmd_error("Application '%s' does not exist.\n", app.c_str());
-
-			FormalApplication *application = apps[app];
-			application->setLogger([](std::string msg) { log("%s",msg.c_str()); } );
-			VeriModule *selected_module = nullptr;
-
-			for (argidx++; argidx < GetSize(args); argidx++) {
-				std::string error;
-				if (application->checkParams(args, argidx, error)) {
-					if (!error.empty())
-						cmd_error(args, argidx, error);
-					continue;
-				}
-
-				if (args[argidx] == "-module" && argidx < GetSize(args)) {
-					if (!(argidx+1 < GetSize(args)))
-						cmd_error(args, argidx+1, "No module name specified.\n");
-					std::string module = args[++argidx];
-					VeriLibrary* veri_lib = veri_file::GetLibrary(work.c_str(), 1);
-					selected_module = veri_lib ? veri_lib->GetModule(module.c_str(), 1) : nullptr;
-					if (!selected_module) {
-						log_error("Can't find module '%s'.\n", module.c_str());
-					}
-					continue;
-				}
-				if (args[argidx] == "-blacklist" && argidx < GetSize(args)) {
-					if (!(argidx+1 < GetSize(args)))
-						cmd_error(args, argidx+1, "No blacklist specified.\n");
-
-					std::string line = args[++argidx];
-					std::string p;
-					while (!(p = next_token(line, ",\t\r\n ")).empty())
-						blacklists.push_back(p);
-					continue;
-				}
-				if (args[argidx] == "-blfile" && argidx < GetSize(args)) {
-					if (!(argidx+1 < GetSize(args)))
-						cmd_error(args, argidx+1, "No blacklist file specified.\n");
-					std::string fn = args[++argidx];
-					std::ifstream f(fn);
-					if (f.fail())
-						log_cmd_error("Can't open blacklist file '%s'!\n", fn.c_str());
-
-					std::string line,p;
-					while (std::getline(f, line)) {
-						while (!(p = next_token(line, ",\t\r\n ")).empty())
-							blacklists.push_back(p);
-					}
-					continue;
-				}
-				break;
-			}
-			if (argidx < GetSize(args))
-				cmd_error(args, argidx, "unknown option/parameter");
-
-			application->setBlacklists(&blacklists);
-			application->setSingleModuleMode(selected_module!=nullptr);
-
-			const char *err = application->validate();
-			if (err)
-				cmd_error(args, argidx, err);
-
-			MapIter mi;
-			VeriLibrary *veri_lib = veri_file::GetLibrary(work.c_str(), 1);
-			log("Running formal application '%s'.\n", app.c_str());
-
-			if (selected_module) {
-				std::string out;
-				if (!application->execute(selected_module, out))
-					log_error("%s", out.c_str());
-			}
-			else {
-				VeriModule *module ;
-				FOREACH_VERILOG_MODULE_IN_LIBRARY(veri_lib, mi, module) {
-					std::string out;
-					if (!application->execute(module, out)) {
-						log_error("%s", out.c_str());
-						break;
-					}
-				}
-			}
-			goto check_error;
-		}
-
-		if (argidx < GetSize(args) && args[argidx] == "-pp")
-		{
-			const char* filename = nullptr;
-			const char* module = nullptr;
-			bool mode_vhdl = false;
-			for (argidx++; argidx < GetSize(args); argidx++) {
-				if (args[argidx] == "-vhdl") {
-					mode_vhdl = true;
-					continue;
-				}
-				if (args[argidx] == "-verilog") {
-					mode_vhdl = false;
-					continue;
-				}
-
-				if (args[argidx].compare(0, 1, "-") == 0) {
-					cmd_error(args, argidx, "unknown option");
-					goto check_error;
-				}
-
-				if (!filename) {
-					filename = args[argidx].c_str();
-					continue;
-				}
-				if (module)
-					log_cmd_error("Only one module can be specified.\n");
-				module = args[argidx].c_str();
-			}
-
-			if (argidx < GetSize(args))
-				cmd_error(args, argidx, "unknown option/parameter");
-
-			if (!filename)
-				log_cmd_error("Filname must be specified.\n");
-
-			if (mode_vhdl)
-				vhdl_file::PrettyPrint(filename, module, work.c_str());
-			else
-				veri_file::PrettyPrint(filename, module, work.c_str());
-			goto check_error;
-		}
-
-		if (argidx < GetSize(args) && args[argidx] == "-template")
-		{
-			if (!(argidx+1 < GetSize(args)))
-				cmd_error(args, argidx+1, "No template type specified.\n");
-
-			VerificTemplateGenerator vfg;
-			auto gens = vfg.GetGenerators();
-			std::string app = args[++argidx];
-			if (gens.find(app) == gens.end())
-				log_cmd_error("Template generator '%s' does not exist.\n", app.c_str());
-			TemplateGenerator *generator = gens[app];
-			if (!(argidx+1 < GetSize(args)))
-				cmd_error(args, argidx+1, "No top module specified.\n");
-			generator->setLogger([](std::string msg) { log("%s",msg.c_str()); } );
-			
-			std::string module = args[++argidx];
-			VeriLibrary* veri_lib = veri_file::GetLibrary(work.c_str(), 1);
-			VeriModule *veri_module = veri_lib ? veri_lib->GetModule(module.c_str(), 1) : nullptr;
-			if (!veri_module) {
-				log_error("Can't find module/unit '%s'.\n", module.c_str());
-			}
-
-			log("Template '%s' is running for module '%s'.\n", app.c_str(),module.c_str());
-
-			Map parameters(STRING_HASH);
-			const char *out_filename = nullptr;
-
-			for (argidx++; argidx < GetSize(args); argidx++) {
-				std::string error;
-				if (generator->checkParams(args, argidx, error)) {
-					if (!error.empty())
-						cmd_error(args, argidx, error);
-					continue;
-				}
-
-				if (args[argidx] == "-chparam"  && argidx < GetSize(args)) {
-					if (!(argidx+1 < GetSize(args)))
-						cmd_error(args, argidx+1, "No param name specified.\n");
-					if (!(argidx+2 < GetSize(args)))
-						cmd_error(args, argidx+2, "No param value specified.\n");
-
-					const std::string &key = args[++argidx];
-					const std::string &value = args[++argidx];
-					unsigned new_insertion = parameters.Insert(key.c_str(), value.c_str(),
-									           1 /* force_overwrite */);
-					if (!new_insertion)
-						log_warning_noprefix("-chparam %s already specified: overwriting.\n", key.c_str());
-					continue;
-				}
-
-				if (args[argidx] == "-out" && argidx < GetSize(args)) {
-					if (!(argidx+1 < GetSize(args)))
-						cmd_error(args, argidx+1, "No output file specified.\n");
-					out_filename = args[++argidx].c_str();
-					continue;
-				}
-
-				break;
-			}
-			if (argidx < GetSize(args))
-				cmd_error(args, argidx, "unknown option/parameter");
-
-			const char *err = generator->validate();
-			if (err)
-				cmd_error(args, argidx, err);
-
-			std::string val;
-			if (!generator->generate(veri_module, val, &parameters))
-				log_error("%s", val.c_str());
-
-			FILE *of = stdout;
-			if (out_filename) {
-				of = fopen(out_filename, "w");
-				if (of == nullptr)
-					log_error("Can't open '%s' for writing: %s\n", out_filename, strerror(errno));
-				log("Writing output to '%s'\n",out_filename);
-			}
-			fprintf(of, "%s\n",val.c_str());
-			fflush(of);
-			if (of!=stdout)
-				fclose(of);
-			goto check_error;
-		}
 
 		if (GetSize(args) > argidx && args[argidx] == "-import")
 		{
@@ -2798,21 +2446,22 @@ struct VerificPass : public Pass {
 
 			std::set<std::string> top_mod_names;
 
-			InitialAssertionRewriter rw;
-			rw.RegisterCallBack();
+
 
 			if (mode_all)
 			{
-				log("Running hier_tree::ElaborateAll().\n");
+				log("ElaborateAll().\n");
 
-				VhdlLibrary *vhdl_lib = vhdl_file::GetLibrary(work.c_str(), 1);
+
 				VeriLibrary *veri_lib = veri_file::GetLibrary(work.c_str(), 1);
 
-				Array veri_libs, vhdl_libs;
-				if (vhdl_lib) vhdl_libs.InsertLast(vhdl_lib);
+				Array veri_libs;
 				if (veri_lib) veri_libs.InsertLast(veri_lib);
 
-				Array *netlists = hier_tree::ElaborateAll(&veri_libs, &vhdl_libs, &parameters);
+				//TODO
+				//Array *netlists = hier_tree::ElaborateAll(&veri_libs, nullptr, &parameters);
+				//				Array *netlists = veri_file::ElaborateMultipleTop(&veri_libs,  &parameters);
+				Array* netlists = nullptr;
 				Netlist *nl;
 				int i;
 
@@ -2826,9 +2475,9 @@ struct VerificPass : public Pass {
 					cmd_error(args, argidx, "No top module specified.\n");
 
 				VeriLibrary* veri_lib = veri_file::GetLibrary(work.c_str(), 1);
-				VhdlLibrary *vhdl_lib = vhdl_file::GetLibrary(work.c_str(), 1);
 
-				Array veri_modules, vhdl_units;
+
+				Array veri_modules;
 				for (; argidx < GetSize(args); argidx++)
 				{
 					const char *name = args[argidx].c_str();
@@ -2841,12 +2490,6 @@ struct VerificPass : public Pass {
 						continue;
 					}
 
-					VhdlDesignUnit *vhdl_unit = vhdl_lib ? vhdl_lib->GetPrimUnit(name) : nullptr;
-					if (vhdl_unit) {
-						log("Adding VHDL unit '%s' to elaboration queue.\n", name);
-						vhdl_units.InsertLast(vhdl_unit);
-						continue;
-					}
 
 					log_error("Can't find module/unit '%s'.\n", name);
 				}
@@ -2861,8 +2504,8 @@ struct VerificPass : public Pass {
 					}
 				}
 
-				log("Running hier_tree::Elaborate().\n");
-				Array *netlists = hier_tree::Elaborate(&veri_modules, &vhdl_units, &parameters);
+				log("Running Verific elaborate multiple top.\n");
+				Array *netlists = veri_file::ElaborateMultipleTop(&veri_modules,  &parameters);
 				Netlist *nl;
 				int i;
 
@@ -2907,7 +2550,7 @@ struct VerificPass : public Pass {
 			}
 
 			veri_file::Reset();
-			vhdl_file::Reset();
+
 			Libset::Reset();
 			verific_incdirs.clear();
 			verific_libdirs.clear();
